@@ -36,27 +36,32 @@ def skills_page(): # Set of skills on this page
         else:
             print("Invalid option.")
 
-user = input("Welcome to InCollege. Are you an existing user or a new user (Write e for existing, n for new)")
+def main():
+    user = input("Welcome to InCollege. Are you an existing user or a new user (Write e for existing, n for new): ")
 
-if user == 'e':
-    valid = False
-    while not valid:
+    if user == 'e':
+        valid = False
+        while not valid:
+            username = input("Please enter your username: ")
+            password = input("Please enter password: ")
+            # Check if username and password match
+                # valid = True
+                # print("You have successfully logged in.")
+            # else:
+                # print("Incorrect username / password, please try again.")
+            valid = True; # DELETEME ONCE VALIDATION MADE!!!!!!!!!!!!!!!!!!!!!
+        home_page()
+
+    if user == 'n':
+        # Check if valid space for new users
+        # If not exit program.
         username = input("Please enter your username: ")
         password = input("Please enter password: ")
-        # Check if username and password match
-            # valid = True
-            # print("You have successfully logged in.")
-        # else:
-            # print("Incorrect username / password, please try again.")
-        valid = True; # DELETEME ONCE VALIDATION MADE!!!!!!!!!!!!!!!!!!!!!
-    home_page()
-
-if user == 'n':
-    # Check if valid space for new users
-    # If not exit program.
-    username = input("Please enter your username: ")
-    password = input("Please enter password: ")
-    # Add new account with username and password
-    print("You have successfully logged in.")
-    home_page()
+        # Add new account with username and password
+        print("You have successfully logged in.")
+        home_page()
     
+    return None
+
+if __name__=="__main__":
+    main()
