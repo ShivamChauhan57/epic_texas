@@ -15,7 +15,7 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
 print(list({**get_requests, **post_requests}.keys()))
 def handle_request(self, request_type):
-    request_handler = {**get_requests, **post_requests}[self.path]
+    request_handler = {**get_requests, **post_requests}.get(self.path)
     if request_handler == None:
         self.send_error(404)
         return
