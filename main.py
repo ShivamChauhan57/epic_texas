@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 import json
 
-url = 'http://localhost:8001'
+url = 'http://localhost:8000'
 
 def login():
     username = input('Please enter your username: ')

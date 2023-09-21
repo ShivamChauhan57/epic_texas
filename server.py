@@ -56,6 +56,6 @@ class MyRequestHandler(http.server.SimpleHTTPRequestHandler):
     do_POST = lambda self: handle_request(self, 'post')
 
 if __name__ == '__main__':
-    with ThreadedHTTPServer(('', PORT), MyRequestHandler) as httpd:
+    with ThreadedHTTPServer(('0.0.0.0', PORT), MyRequestHandler) as httpd:
         print(f'Serving on port {PORT}')
         httpd.serve_forever()
