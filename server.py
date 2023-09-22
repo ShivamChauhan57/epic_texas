@@ -15,7 +15,7 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
 print(list({**get_requests, **post_requests}.keys()))
 def handle_request(self, request_type):
-    request_handler = {**get_requests, **post_requests}[self.path]
+    request_handler = {**get_requests, **post_requests}.get(self.path)
     if request_handler == None:
         self.send_error(404)
         return
@@ -29,11 +29,11 @@ def handle_request(self, request_type):
 
     if 'user' in inspect.signature(request_handler).parameters:
         try:
+            assert self.headers['Authorization']
             token = self.headers['Authorization'].strip().split(' ')[1]
             payload = jwt.decode(token, Path('./jwt-key.txt').read_text().strip(), algorithms=['HS256'])
             kwargs['user'] = (payload['user_id'], payload['username'])
-        except (KeyError, IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
-            print(e)
+        except (AssertionError, IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             self.send_error(401)
             return
 
@@ -49,7 +49,7 @@ def handle_request(self, request_type):
     self.wfile.write(response.encode())
 
 class ThreadedHTTPServer(ThreadingMixIn, socketserver.TCPServer):
-    pass
+    allow_reuse_address = True
 
 class MyRequestHandler(http.server.SimpleHTTPRequestHandler):
     do_GET = lambda self: handle_request(self, 'get')
