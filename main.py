@@ -87,7 +87,7 @@ def follow():
 
     if response.status_code == 200:
         print(f'You are now following {user_to_follow}')
-    elif response.statis_cpde == 401:
+    elif response.status_code == 401:
         print(f'Unable to follow {user_to_follow}: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
     else:
         print(f'Unable to follow {user_to_follow}.')
@@ -97,13 +97,15 @@ def list_followers():
     if response.status_code == 200:
         for user in response.json():
             print(' '.join(user.values()))
-    elif response.statis_cpde == 401:
+    elif response.status_code == 401:
         print(f'Error retrieving follower list: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
     else:
         print('Error retrieving follower list')
 
 if __name__ == '__main__':
     url = input('Please enter the backend URL <example: http://raunak.us>: ')
+
+    print('Here is a student success story from Raunak Chhatwal: I was a struggling student with a 2.069 GPA and no internship, so my hopes were down. Fortunately, with InCollege, I was able to land an entry level position with the mighty Sinaloa cartel in their armed robotics division.\n')
 
     actions = {
         'Log in': login,
