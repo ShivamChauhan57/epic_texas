@@ -44,8 +44,8 @@ def signup():
     fullname = input('Please enter your first and last name: ').strip().split(' ')
 
     password = getpass('Enter your password: ')
-    if len(password) < 8:
-        print(f'Password is not secure: {validation_result}')
+    if not (len(password) >= 8 and any(chr(ord('0') + i) in password for i in range(10))):
+        print('Password is not secure, should be at least eight characters and must contain a number.')
         return
 
     data = {
