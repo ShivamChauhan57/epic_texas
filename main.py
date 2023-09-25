@@ -81,6 +81,20 @@ def discover_users():
     else:
         print('Error retrieving user list')
 
+def lookup_user():
+    firstname = input('Enter the user\'s first name: ').strip()
+    lastname = input('Enter the user\'s last name: ').strip()
+
+    response = requests.post(f'{url}/lookup-user', data=json.dumps({ 'firstname': firstname, 'lastname': lastname }))
+
+    if response.status_code == 200:
+        if response.json()['matches']:
+            print(f'{firstname} {lastname} is a part of the InCollege system.')
+        else:
+            print(f'{firstname} {lastname} is not yet a part of the InCollege system yet.')
+    else:
+        print('Unable to lookup whether user is part of the InCollege system')
+
 def follow():
     user_to_follow = input('Enter the username of the user to follow: ')
     response = requests.post(f'{url}/follow', data=json.dumps({ 'username': user_to_follow }), headers=authorization_header())
@@ -112,6 +126,7 @@ if __name__ == '__main__':
         'Sign up': signup,
         'See profile': see_profile,
         'Discover users': discover_users,
+        'Lookup user': lookup_user,
         'Follow a user': follow,
         'See your followers': list_followers,
         'Exit the shell': sys.exit

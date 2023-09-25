@@ -13,7 +13,6 @@ from request_handlers import get_requests, post_requests
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 
-print(list({**get_requests, **post_requests}.keys()))
 def handle_request(self, request_type):
     request_handler = {**get_requests, **post_requests}.get(self.path)
     if request_handler == None:
@@ -24,7 +23,6 @@ def handle_request(self, request_type):
     if request_type == 'post':
         content_length = int(self.headers['Content-Length'])
         raw_data = self.rfile.read(content_length)
-        print(raw_data)
         kwargs['data'] = json.loads(raw_data)
 
     if 'user' in inspect.signature(request_handler).parameters:
@@ -37,10 +35,10 @@ def handle_request(self, request_type):
             self.send_error(401)
             return
 
-    conn = sqlite3.connect('users.db')
-    response, status = request_handler(conn, **kwargs)
+    with sqlite3.connect('users.db') as conn:
+        response, status = request_handler(conn, **kwargs)
+
     response = json.dumps(response)
-    conn.close()
 
     self.send_response(status)
     self.send_header('Content-Type', 'application/json')

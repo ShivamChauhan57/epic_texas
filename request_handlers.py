@@ -4,11 +4,23 @@ import time
 import jwt
 
 def list_users(conn):
-    c = conn.cursor()
-    c.execute('SELECT username, firstname, lastname FROM users')
-    users = c.fetchall()
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, firstname, lastname FROM users')
+    users = cursor.fetchall()
 
     return [{label: user[i] for i, label in enumerate(['username', 'firstname', 'lastname'])} for user in users], 200
+
+def lookup_user(conn, data):
+    try:
+        firstname, lastname = tuple(data[label] for label in ['firstname', 'lastname'])
+    except KeyError:
+        return {'error': 'Missing data.'}, 400
+
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users WHERE firstname=? AND lastname=?', (firstname, lastname))
+    matches = cursor.fetchone()[0]
+    
+    return { 'matches': matches }, 200
 
 def log_in(conn, data):
     try:
@@ -16,9 +28,9 @@ def log_in(conn, data):
     except KeyError:
         return {'error': 'Missing data, both username and password are required.'}, 400
 
-    c = conn.cursor()
-    c.execute("SELECT id, username, passwordHash FROM users WHERE username=?", (username,))
-    user = c.fetchone()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, passwordHash FROM users WHERE username=?", (username,))
+    user = cursor.fetchone()
 
     if user is None:
         return {'error': 'Invalid username or password.'}, 400
@@ -44,28 +56,29 @@ def add_user(conn, data):
     except KeyError:
         return {'error': 'Missing data, all fields are required.'}, 400
 
-    cursor = conn.cursor()
-    
     try:
+        cursor = conn.cursor()
         cursor.execute("INSERT INTO users (username, firstname, lastname, passwordHash) VALUES (?, ?, ?, ?)",
-                       (username, firstname, lastname, passwordHash))
+                    (username, firstname, lastname, passwordHash))
         conn.commit()
+        
+        # Retrieve the new user's id
+        user_id = cursor.lastrowid
     except sqlite3.IntegrityError:
         # This error will be raised if the username is not unique
         return {'error': 'The username you chose has already been taken.'}, 400
 
-    # Retrieve the new user's id
-    user_id = cursor.lastrowid
     response = {'id': user_id, 'username': username, 'firstname': firstname, 'lastname': lastname}
 
     return response, 200
 
 def get_profile(conn, user):
     user_id = user[0]
-    cursor = conn.cursor()
 
+    cursor = conn.cursor()
     cursor.execute('SELECT username, firstname, lastname FROM users WHERE id = ?', (user_id,))
     profile = cursor.fetchone()
+
     return {label: profile[i] for i, label in enumerate(['username', 'firstname', 'lastname'])}, 200
 
 def follow(conn, data, user):
@@ -77,10 +90,10 @@ def follow(conn, data, user):
     if user[1] == target_username:
         return {'error': 'You cannot follow yourself.'}, 400
 
-    c = conn.cursor()
-    c.execute("SELECT id FROM users WHERE username=?", (target_username,))
-    target = c.fetchone()
-    
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE username=?", (target_username,))
+    target = cursor.fetchone()
+
     if not target:
         return {'error': 'User not found.'}, 404
 
@@ -88,7 +101,7 @@ def follow(conn, data, user):
     user_id = user[0]
     
     try:
-        c.execute("INSERT INTO followers (user_id, follower_id) VALUES (?, ?)", (target_id, user_id))
+        cursor.execute("INSERT INTO followers (user_id, follower_id) VALUES (?, ?)", (target_id, user_id))
         conn.commit()
     except sqlite3.IntegrityError:
         return {'error': 'You are already following this user.'}, 400
@@ -97,8 +110,8 @@ def follow(conn, data, user):
 
 def get_followers(conn, user):
     user_id = user[0] # get the user_id from the authenticated user tuple
-    cursor = conn.cursor()
     
+    cursor = conn.cursor()
     cursor.execute("SELECT u.username, u.firstname, u.lastname FROM users u JOIN followers f ON u.id = f.follower_id WHERE f.user_id = ?", (user_id,))
     followers = cursor.fetchall()
 
@@ -112,6 +125,7 @@ get_requests = {
 }
 
 post_requests = {
+    '/lookup-user': lookup_user,
     '/login': log_in,
     '/add-user': add_user,
     '/follow': follow
