@@ -1,0 +1,6 @@
+venv/
+shell.nix
+users.db
+jwt-key.txt
+jwt-token.txt
+__pycache__/
