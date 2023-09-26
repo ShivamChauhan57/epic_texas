@@ -13,6 +13,9 @@ def authorization_header():
 
 url = None
 
+def playvideo():
+    print('\n\nVideo is now playing\n')
+    
 def login():
     username = input('Please enter your username: ')
     passwordHash = hashlib.sha256(getpass('Enter your password: ').encode()).hexdigest()
@@ -122,6 +125,7 @@ if __name__ == '__main__':
     print('Here is a student success story from Raunak Chhatwal: I was a struggling student with a 2.069 GPA and no internship, so my hopes were down. Fortunately, with InCollege, I was able to land an entry level position with the mighty Sinaloa cartel in their armed robotics division.\n')
 
     actions = {
+        '\nInCollege Video\n': playvideo,
         'Log in': login,
         'Sign up': signup,
         'See profile': see_profile,
