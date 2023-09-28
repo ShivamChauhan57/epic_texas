@@ -118,15 +118,39 @@ def get_followers(conn, user):
     # return [follower[0] for follower in followers], 200
     return [{label: follower[i] for i, label in enumerate(['username', 'firstname', 'lastname'])} for follower in followers], 200
 
+def post_job(conn, data, user):
+    try:
+        title, description, employer, location, salary = tuple(data[label] for label in ['title', 'description', 'employer', 'location', 'salary'])
+    except KeyError:
+        return {'error': 'Missing data, all fields are required.'}, 400
+
+    user_id = user[0]
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO job_postings (title, description, employer, location, salary, user_id) VALUES (?, ?, ?, ?, ?, ?)", (title, description, employer, location, salary, user_id))
+    conn.commit()
+
+    return {'message': 'Job posting created successfully.'}, 200
+
+def get_job_postings(conn, user):
+    cursor = conn.cursor()
+    cursor.execute("""SELECT jp.title, jp.description, jp.employer, jp.location, jp.salary, u.username
+                        FROM job_postings AS jp JOIN users AS u
+                        WHERE jp.user_id = u.id""")
+    postings = cursor.fetchall()
+
+    return [{field: posting[i] for i, field in enumerate(['title', 'description', 'employer', 'location', 'salary', 'username'])} for posting in postings], 200
+
 get_requests = {
     '/list-users': list_users,
     '/profile': get_profile,
     '/followers': get_followers,
+    '/job-postings': get_job_postings
 }
 
 post_requests = {
     '/lookup-user': lookup_user,
     '/login': log_in,
     '/add-user': add_user,
-    '/follow': follow
+    '/follow': follow,
+    '/post-job': post_job
 }
