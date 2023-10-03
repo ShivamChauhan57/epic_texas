@@ -77,8 +77,18 @@ class Menu:
 
             if self.access_token == None:
                 options = [('Sign Up', self.signup)] + options
+
         elif self.mode == 'incollege links':
-            raise Exception('Not implemented')
+            options = [
+                ('Copyright Notice', lambda: print('We\'re here to help')),
+                ('About', lambda: print(about_message)),
+                ('Accessibility', lambda: print(press_message)),
+                ('User Agreement', self.under_construction),
+                ('Privacy Policy', self.under_construction),
+                ('Cookie Policy', self.under_construction),
+                ('Copyright Policy', lambda: self.change_mode('useful links'))
+                
+            ]
 
         return options
 
