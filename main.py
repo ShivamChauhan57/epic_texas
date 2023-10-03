@@ -137,9 +137,18 @@ If you have any questions or concerns about our Cookie Policy, please contact us
                 ('Accessibility', lambda: print(press_message)),
                 ('User Agreement', self.under_construction),
                 ('Privacy Policy', self.under_construction),
+<<<<<<< HEAD
                 ('Cookie Policy', lambda: print(cookie_policy)),
                 ('Copyright Policy', lambda: self.change_mode('useful links'))
                 
+=======
+                ('Cookie Policy', self.under_construction),
+                ('Copyright Policy', lambda: self.change_mode('useful links')),
+                ('Brand Policy', lambda: self.change_mode('useful links')),
+                ('Guest Controls', lambda: self.change_mode('useful links')),
+                ('Languages', lambda: self.change_mode('useful links')),
+                   
+>>>>>>> 3afda0acf6b19f0f83f843ad0dd25d962850414e
             ]
 
         return options
