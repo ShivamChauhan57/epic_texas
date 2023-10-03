@@ -68,6 +68,11 @@ def add_user(conn, data):
         # This error will be raised if the username is not unique
         return {'error': 'The username you chose has already been taken.'}, 400
 
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO user_preferences (user_id, email_notifications_enabled, sms_notifications_enabled, targeted_advertising_enabled, language) VALUES (?, ?, ?, ?, ?)",
+                (user_id, True, True, True, 'english'))
+    conn.commit()
+
     response = {'id': user_id, 'username': username, 'firstname': firstname, 'lastname': lastname}
 
     return response, 200
@@ -131,7 +136,7 @@ def post_job(conn, data, user):
 
     return {'message': 'Job posting created successfully.'}, 200
 
-def get_job_postings(conn, user):
+def get_job_postings(conn):
     cursor = conn.cursor()
     cursor.execute("""SELECT jp.title, jp.description, jp.employer, jp.location, jp.salary, u.username
                         FROM job_postings AS jp JOIN users AS u
@@ -140,11 +145,40 @@ def get_job_postings(conn, user):
 
     return [{field: posting[i] for i, field in enumerate(['title', 'description', 'employer', 'location', 'salary', 'username'])} for posting in postings], 200
 
+def get_user_preferences(conn, user):
+    user_id = user[0]
+
+    cursor = conn.cursor()
+    cursor.execute('SELECT email_notifications_enabled, sms_notifications_enabled, targeted_advertising_enabled, language FROM user_preferences WHERE user_id = ?', (user_id,))
+    preferences = cursor.fetchone()
+
+    if preferences is None:
+        return {'error': 'Preferences not found'}, 404
+
+    return {label: preferences[i] for i, label in enumerate(['email_notifications_enabled', 'sms_notifications_enabled', 'targeted_advertising_enabled', 'language'])}, 200
+
+def set_user_preferences(conn, data, user):
+    user_id = user[0]
+
+    if len(data) != 1:
+        return {'error': 'FORMAT: { field: value }'}, 400
+    field, value = list(data.items())[0]
+
+    cursor = conn.cursor()
+    cursor.execute(f'UPDATE user_preferences SET {field} = ? WHERE user_id = ?', (value, user_id))
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        return {'error': 'Failed to update preferences.'}, 500
+
+    return {'message': 'Preferences updated successfully.'}, 200
+
 get_requests = {
     '/list-users': list_users,
     '/profile': get_profile,
     '/followers': get_followers,
-    '/job-postings': get_job_postings
+    '/job-postings': get_job_postings,
+    '/user-preferences': get_user_preferences
 }
 
 post_requests = {
@@ -152,5 +186,6 @@ post_requests = {
     '/login': log_in,
     '/add-user': add_user,
     '/follow': follow,
-    '/post-job': post_job
+    '/post-job': post_job,
+    '/set-user-preferences': set_user_preferences
 }
