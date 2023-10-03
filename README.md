@@ -8,7 +8,7 @@
 ## Using main.py with an existing backend
 
 1. Run `python3 main.py <backend url>`.
-2. If no url provided (i.e. just `python3 main.py` was run, http://raunak.us will be used)
+2. If no url provided (i.e. just `python3 main.py` was run), http://raunak.us will be used.
 3. The application will now interact with the specified backend for requesting and managing user data.
 4. Use the available actions such as "Log in", "Sign up", "See profile", "Discover users", etc. to interact with the application.
 

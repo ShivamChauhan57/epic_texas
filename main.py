@@ -3,12 +3,20 @@ import hashlib
 import requests
 import sys
 import json
+from pathlib import Path
+import os
 
 class Menu:
     def __init__(self, url):
         self.url = url
         self.access_token = None
         self.mode = 'log-in'
+
+        # these values are fetched when user logs in
+        self.email_notifications_enabled = None
+        self.sms_notifications_enabled = None
+        self.targeted_advertising_enabled = None
+        self.language = None
 
     def main(self):
         while True:
@@ -37,6 +45,10 @@ class Menu:
                 ('Exit', sys.exit)
             ]
         elif self.mode == 'main':
+            if not self.access_token:
+                self.change_mode('log-in')
+                return self.options()
+
             options = [
                 ('See profile', self.see_profile),
                 ('Discover users', self.discover_users),
@@ -77,225 +89,48 @@ class Menu:
 
             if self.access_token == None:
                 options = [('Sign Up', self.signup)] + options
-
         elif self.mode == 'incollege links':
-            cookie_policy = '''\nCookie Policy
-
-Last Updated: 10/02/2023
-
-This Cookie Policy explains how [Your Website Name] ("we," "us," or "our") uses cookies and similar tracking technologies on our website. By using our website, you consent to the use of cookies as described in this policy.
-
-1. What Are Cookies?
-
-Cookies are small text files that are placed on your device (computer, tablet, smartphone) when you visit our website. They serve various purposes, including enhancing your browsing experience, providing analytics data, and delivering personalized content and advertisements.
-
-2. Types of Cookies We Use
-We use different types of cookies for various purposes:
-
-a. Essential Cookies:
-These cookies are necessary for the basic functionality of our website. They enable features such as navigation, login, and access to secure areas. You cannot opt out of essential cookies as they are required for the website to function properly.
-
-b. Analytical Cookies:
-We use analytical cookies to collect information about how you interact with our website. This data helps us understand user behavior, improve our website, and measure the effectiveness of our content. Analytical cookies may include:
-Google Analytics: These cookies are used to track user interactions on our website. You can learn more about Google Analytics and opt out here.
-
-c. Advertising Cookies:
-
-We work with third-party advertising partners to display advertisements on our website. These partners may use advertising cookies to deliver personalized ads based on your interests and online behavior. Advertising cookies may include:
-
-[Ad 1]: You can review their privacy policy and opt-out options on their website.
-[Ad 2]: You can review their privacy policy and opt-out options on their website.
-d. Functional Cookies:
-
-Functional cookies enhance your user experience by remembering your preferences and settings. These cookies may include:
-
-[Function 1]: Description of the function and its purpose.
-[Function 2]: Description of the function and its purpose.
-
-3. How Long Do Cookies Stay on Your Device?
-
-Cookies can have different durations:
-
-Session Cookies: These cookies are temporary and expire when you close your browser.
-Persistent Cookies: Persistent cookies remain on your device for a specified period, even after you close your browser.
-
-4. Managing Cookies
-You can manage and control cookies through your browser settings. Most browsers allow you to refuse or delete cookies. Please note that disabling cookies may affect your experience on our website.
-
-5. Third-Party Cookies
-Some cookies on our website may be set by third-party providers, such as advertising partners and analytics services. These cookies are subject to the privacy policies of the respective third-party providers. You can typically opt out of third-party cookies by visiting the providers' websites.
-
-6. Updates to This Policy
-We may update this Cookie Policy to reflect changes in our cookie usage or legal requirements. Any updates will be posted on this page.
-
-7. Contact Us
-If you have any questions or concerns about our Cookie Policy, please contact us at [Contact Information].
-'''
-            privacy_policy = '''\nPrivacy Policy
-
-Last Updated: 10/02/2023
-
-This Program ("we," "us," or "our") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your personal information when you visit our website or use our services. By accessing or using our website, you consent to the practices described in this Privacy Policy.
-
-1. Information We Collect
-
-a. Personal Information: We may collect personal information that you voluntarily provide to us, such as your name, email address, and any other information you choose to provide when contacting us or using our services.
-
-b. Automatically Collected Information: We may collect certain information automatically when you visit our website, including your IP address, browser type, operating system, and usage patterns. We may use cookies and similar technologies to gather this information.
-
-2. How We Use Your Information
-
-We may use your personal information for the following purposes:
-
-a. To provide and improve our website and services.
-b. To respond to your inquiries and requests.
-c. To send you updates, newsletters, and promotional materials if you have consented to receive them.
-d. To monitor and analyze website usage and trends.
-
-3. Disclosure of Your Information
-
-We may share your personal information with third parties in the following situations:
-
-a. With your consent.
-b. To comply with legal obligations.
-c. To protect our rights, privacy, safety, or property, or that of our users or third parties.
-
-4. Your Choices
-
-You have the following rights regarding your personal information:
-
-a. Access: You can request access to the personal information we hold about you.
-b. Correction: You can request correction of any inaccurate or incomplete personal information.
-c. Deletion: You can request the deletion of your personal information.
-d. Opt-Out: You can opt out of receiving promotional emails from us.
-
-5. Security
-
-We take reasonable measures to protect your personal information from unauthorized access, disclosure, or alteration. However, please be aware that no method of transmission over the internet or electronic storage is completely secure.
-
-6. Links to Other Websites
-
-Our website may contain links to third-party websites or services. We are not responsible for the privacy practices or content of these websites. We encourage you to review the privacy policies of any third-party sites you visit.
-
-7. Changes to This Privacy Policy
-
-We may update this Privacy Policy to reflect changes in our practices or legal requirements. Any updates will be posted on this page.
-
-8. Contact Us
-
-If you have any questions or concerns about our Privacy Policy, please contact us at [Contact Information].
-'''
-            copyright_policy='''Copyright Policy
-
-Last Updated: [Date]
-
-[Your Website Name] ("we," "us," or "our") respects the intellectual property rights of others and expects our users to do the same. This Copyright Policy outlines our commitment to protecting copyrights and intellectual property on our website.
-
-1. Copyright Ownership
-
-a. All content, including text, images, graphics, videos, and other materials displayed on our website, is protected by copyright and other intellectual property laws.
-
-b. We either own the copyright to the content on our website or have obtained the necessary licenses or permissions to use the content.
-
-2. Use of Our Content
-
-a. You may access and view the content on our website for personal, non-commercial purposes only.
-
-b. You may not copy, reproduce, distribute, publish, display, modify, or create derivative works from any content on our website without our explicit written permission or as permitted by applicable copyright laws.
-
-3. User-Generated Content
-
-a. Users who contribute content to our website, such as comments, reviews, or forum posts, must ensure they have the necessary rights or permissions to use copyrighted materials.
-
-b. By submitting content to our website, users grant us a non-exclusive, royalty-free, worldwide license to use, reproduce, modify, distribute, and display the content for the purpose of operating and promoting our website.
-
-4. Copyright Infringement Claims
-
-a. If you believe that your copyright-protected work has been used on our website in a way that constitutes copyright infringement, please provide our designated Copyright Agent with the following information:
-
-A physical or electronic signature of the copyright owner or authorized representative.
-Identification of the copyrighted work claimed to have been infringed.
-Identification of the allegedly infringing material on our website, including its location.
-Your contact information, including name, address, phone number, and email address.
-A statement that you have a good-faith belief that the use of the copyrighted material is not authorized by the copyright owner, its agent, or the law.
-A statement, made under penalty of perjury, that the information provided in the notice is accurate and that you are the copyright owner or authorized to act on their behalf.
-b. Our designated Copyright Agent for notice of claims of copyright infringement can be reached at:
-
-[Copyright Agent Name]
-[Copyright Agent Address]
-[Copyright Agent Email]
-[Copyright Agent Phone]
-
-5. Counter-Notification
-
-a. If you believe that your content was removed or disabled in error or as a result of misidentification, you may submit a counter-notification to our Copyright Agent. The counter-notification must include:
-
-Your physical or electronic signature.
-Identification of the material that has been removed or to which access has been disabled.
-A statement, under penalty of perjury, that you have a good-faith belief that the material was removed or disabled as a result of mistake or misidentification.
-Your contact information, including name, address, phone number, and email address.
-A statement that you consent to the jurisdiction of the federal district court located within [Your Jurisdiction], and that you will accept service of process from the person who provided the original copyright infringement notification or an agent of such person.
-6. Changes to This Copyright Policy
-
-We may update this Copyright Policy to reflect changes in our practices or legal requirements. Any updates will be posted on this page.
-
-7. Contact Us
-
-If you have any questions or concerns about our Copyright Policy, please contact us at [Contact Information].'''
-           
-            copyright_notice = "InCollege © 2023 All Rights Reserved."
-
-            about = """ InCollege: We are a community of students who understand the transition from college to the job market. We built this application to assist in this transition.
-            """
-            accessibility = """InCollege is committed to providing a website that is accessible to the widest possible audience, regardless of technology or ability """
-
-            user_agreement = """
-            This User Agreement is a legal agreement between you and InCollege governing your use of the Connectify platform, including its website, mobile applications, and related services. By using the Platform, you agree to be bound by the terms and conditions of this Agreement.
-
-            1. Dont hack us.
-            2. Be nice.
-            """
-            brand_policy = """
-            Brand Policy - InCollege
-            Effective Date: 10/2/2023
-
-            1. Introduction
-
-            This Brand Policy document outlines the guidelines and standards for the consistent representation of the company brand across all communications.
-
-            2. Logo
-
-            Please use our offical logo.
-            """
-
-            options = [
-                ('Copyright Notice', lambda: print(copyright_notice)),
-                ('About', lambda: print(about)),
-                ('Accessibility', lambda: print(accessibility)),
-                ('User Agreement',lambda: print(user_agreement)),
-                ('Privacy Policy',lambda: print(privacy_policy)),
-                ('Cookie Policy', lambda: print(cookie_policy)),
-                ('Copyright Policy', lambda: print(copyright_policy)),
-                ('Brand Policy', lambda: print(brand_policy)),
-                ('Guest Controls', lambda: self.change_mode('guest controls')),
-                ('Languages', lambda: self.change_mode('languages')),
-                ('Go back', lambda: self.change_mode('main')),
-            ]
+            documents = {
+                'Cookie Policy': 'cookie-policy.txt',
+                'Privacy Policy': 'privacy-policy.txt',
+                'Copyright Policy': 'copyright-policy.txt',
+                'Copyright Notice': 'copyright-notice.txt',
+                'About': 'about.txt',
+                'Accessibility': 'accessibility.txt',
+                'User Agreement': 'user-agreement.txt',
+                'Brand Policy': 'brand-policy.txt'
+            }
+
+            options = [(document, lambda textfile=textfile: print(Path(f'./documents/{textfile}').read_text().strip()))
+                for document, textfile in documents.items()]
+
+            if self.access_token:
+                options += [
+                    ('Guest Controls', lambda: self.change_mode('guest controls')),
+                    ('Languages', lambda: self.change_mode('languages'))
+                ]
+
+            options.append(('Go back', lambda: self.change_mode('main' if self.access_token else 'log-in')))
         elif self.mode == 'guest controls':
-            on = "ON"
-            off = "ON"
-            options = [
-            ('InCollege Email', lambda: print("InCollege Email",off)),
-            ('SMS', lambda: print("SMS", on)),
-            ('Targeted Advertising', lambda: print("Targeted Advertising", on)),
-            ('Go back', lambda: self.change_mode('incollege links')),
+            self.fetch_user_preferences()
+            if any(setting == None for setting in
+                [self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language]):
+                print('Error fetching user preferences')
+                return [('Go back', lambda: self.change_mode('incollege links'))]
 
-                   
-            ]
+            # ['email_notifications_enabled', 'sms_notifications_enabled', 'targeted_advertising_enabled', 'language']
+            options = [(f'Turn {option} {"Off" if toggle else "On"}',
+                lambda field=field, toggle=toggle: self.set_user_preferences(field, not toggle))
+                for field, option, toggle in [
+                    ('email_notifications_enabled', 'InCollege Email', self.email_notifications_enabled),
+                    ('sms_notifications_enabled', 'SMS', self.sms_notifications_enabled),
+                    ('targeted_advertising_enabled', 'Targeted Advertising', self.targeted_advertising_enabled)
+                ]]
+            options.append(('Go back', lambda: self.change_mode('incollege links')))
         elif self.mode == 'languages':
             options = [
-                ('English', lambda: print("\nLanguage set to English")),
-                ('Spanish', lambda: print("\nIdioma configurado en español")),
+                ('English', lambda: self.set_user_preferences('language', 'english')),
+                ('Spanish', lambda: self.set_user_preferences('language', 'spanish')),
                 ('Go Back', lambda: self.change_mode('incollege links'))
             ]
             
@@ -303,15 +138,13 @@ If you have any questions or concerns about our Copyright Policy, please contact
 
     def change_mode(self, new_mode):
         self.mode = new_mode
-        if self.options() == None:
-            raise Exception(f'Invalid mode: {self.mode}')
 
     def under_construction(self):
         print('Under construction')
         
     def login(self):
         username = input('Please enter your username: ')
-        passwordHash = hashlib.sha256(getpass('Enter your password: ').encode()).hexdigest()
+        passwordHash = hashlib.sha256(getpass('Enter your password: ').strip().encode()).hexdigest()
 
         data = {
             'username': username,
@@ -343,11 +176,17 @@ If you have any questions or concerns about our Copyright Policy, please contact
             return
 
         fullname = input('Please enter your full name: ').strip().split(' ')
-        assert len(fullname) >= 2
+        if len(fullname) < 2:
+            print('Enter your full name!')
+            return
 
-        password = getpass('Enter your password: ')
+        password = getpass('Enter your password: ').strip()
         if not (len(password) >= 8 and any(chr(ord('0') + i) in password for i in range(10))):
             print('Password is not secure, should be at least eight characters and must contain a number.')
+            return
+
+        if getpass('Confirm your password: ').strip() != password:
+            print('Passwords don\'t match!')
             return
 
         data = {
@@ -381,7 +220,7 @@ If you have any questions or concerns about our Copyright Policy, please contact
             print('Error retrieving user list')
 
         if len(users := response.json()):
-            for user in response.json():
+            for user in users:
                 print(' '.join(user.values()))
         else:
             print('No users yet.')
@@ -442,7 +281,7 @@ If you have any questions or concerns about our Copyright Policy, please contact
             print('Error creating job posting.')
 
     def get_job_postings(self):
-        response = requests.get(f'{self.url}/job-postings', headers={ 'Authorization': f'Bearer {self.access_token}' })
+        response = requests.get(f'{self.url}/job-postings')
         if response.status_code != 200:
             print('Error fetching job postings.')
             return
@@ -453,6 +292,26 @@ If you have any questions or concerns about our Copyright Policy, please contact
                 print('\n'.join(f'{key}: {value}' for key, value in posting.items()))
         else:
             print('No job postings found.')
+
+    def fetch_user_preferences(self):
+        response = requests.get(f'{self.url}/user-preferences', headers={ 'Authorization': f'Bearer {self.access_token}' })
+
+        if response.status_code == 200:
+            self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language = response.json().values()
+        else:
+            self.email_notifications_enabled = None
+            self.sms_notifications_enabled = None
+            self.targeted_advertising_enabled = None
+            self.language = None
+
+    def set_user_preferences(self, field, value):
+        response = requests.post(f'{self.url}/set-user-preferences',
+            data=json.dumps({ field: value }),
+            headers={ 'Content-Type': 'application/json', 'Authorization': f'Bearer {self.access_token}' })
+        if response.status_code == 200:
+            print('Successfully updated user preferences.')
+        else:
+            print(f'Error updating {field} to {value}')
 
 if __name__ == '__main__':
     print('Here is a student success story from Raunak Chhatwal: I was a struggling student with a 2.069 GPA and no internship, so my hopes were down. Fortunately, with InCollege, I was able to land an entry level position with the mighty Sinaloa cartel in their armed robotics division.\n')

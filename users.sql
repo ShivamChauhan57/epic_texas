@@ -4,7 +4,6 @@ CREATE TABLE users (
     firstname TEXT,
     lastname TEXT,
     passwordHash TEXT
-    
 );
 
 CREATE TABLE followers (
@@ -24,5 +23,15 @@ CREATE TABLE job_postings (
     location TEXT NOT NULL,
     salary INTEGER,
     user_id INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE TABLE user_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER UNIQUE,
+    email_notifications_enabled BOOLEAN,
+    sms_notifications_enabled BOOLEAN,
+    targeted_advertising_enabled BOOLEAN,
+    language TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
