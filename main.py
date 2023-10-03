@@ -242,18 +242,54 @@ We may update this Copyright Policy to reflect changes in our practices or legal
 7. Contact Us
 
 If you have any questions or concerns about our Copyright Policy, please contact us at [Contact Information].'''
+           
+            copyright_notice = "InCollege © 2023 All Rights Reserved."
+
+            about = """ InCollege: We are a community of students who understand the transition from college to the job market. We built this application to assist in this transition.
+            """
+            accessibility = """InCollege is committed to providing a website that is accessible to the widest possible audience, regardless of technology or ability """
+
+            user_agreement = """
+            This User Agreement is a legal agreement between you and InCollege governing your use of the Connectify platform, including its website, mobile applications, and related services. By using the Platform, you agree to be bound by the terms and conditions of this Agreement.
+
+            1. Dont hack us.
+            2. Be nice.
+            """
+            brand_policy = """
+            Brand Policy - InCollege
+            Effective Date: 10/2/2023
+
+            1. Introduction
+
+            This Brand Policy document outlines the guidelines and standards for the consistent representation of the company brand across all communications.
+
+            2. Logo
+
+            Please use our offical logo.
+            """
+
             options = [
-                ('Copyright Notice', lambda: print('We\'re here to help')),
-                ('About', lambda: print(about_message)),
-                ('Accessibility', lambda: print(press_message)),
-                ('User Agreement', self.under_construction),
-                ('Privacy Policy', lambda: print(privacy_policy)),
+                ('Copyright Notice', lambda: print(copyright_notice)),
+                ('About', lambda: print(about)),
+                ('Accessibility', lambda: print(accessibility)),
+                ('User Agreement',lambda: print(user_agreement)),
+                ('Privacy Policy',lambda: print(privacy_policy)),
                 ('Cookie Policy', lambda: print(cookie_policy)),
-                ('Copyright Policy',lambda: print(copyright_policy)),
-                ('Brand Policy', lambda: self.change_mode('useful links')),
-                ('Guest Controls', lambda: self.change_mode('useful links')),
+                ('Copyright Policy', lambda: print(copyright_policy)),
+                ('Brand Policy', lambda: print(brand_policy)),
+                ('Guest Controls', lambda: self.change_mode('guest controls')),
                 ('Languages', lambda: self.change_mode('languages')),
-                ('Go Back', lambda: self.change_mode('main' if self.access_token else 'log-in'))
+                ('Go back', lambda: self.change_mode('main')),
+            ]
+        elif self.mode == 'guest controls':
+            on = "ON"
+            off = "ON"
+            options = [
+            ('InCollege Email', lambda: print("InCollege Email",off)),
+            ('SMS', lambda: print("SMS", on)),
+            ('Targeted Advertising', lambda: print("Targeted Advertising", on)),
+            ('Go back', lambda: self.change_mode('incollege links')),
+
                    
             ]
         elif self.mode == 'languages':
