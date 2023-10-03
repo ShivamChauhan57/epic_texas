@@ -4,6 +4,7 @@ CREATE TABLE users (
     firstname TEXT,
     lastname TEXT,
     passwordHash TEXT
+    
 );
 
 CREATE TABLE followers (
