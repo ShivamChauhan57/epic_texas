@@ -86,8 +86,11 @@ class Menu:
                 ('User Agreement', self.under_construction),
                 ('Privacy Policy', self.under_construction),
                 ('Cookie Policy', self.under_construction),
-                ('Copyright Policy', lambda: self.change_mode('useful links'))
-                
+                ('Copyright Policy', lambda: self.change_mode('useful links')),
+                ('Brand Policy', lambda: self.change_mode('useful links')),
+                ('Guest Controls', lambda: self.change_mode('useful links')),
+                ('Languages', lambda: self.change_mode('useful links')),
+                   
             ]
 
         return options
