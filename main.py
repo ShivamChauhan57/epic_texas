@@ -79,6 +79,58 @@ class Menu:
                 options = [('Sign Up', self.signup)] + options
 
         elif self.mode == 'incollege links':
+            cookie_policy = '''Cookie Policy
+
+Last Updated: 10/02/2023
+
+This Cookie Policy explains how [Your Website Name] ("we," "us," or "our") uses cookies and similar tracking technologies on our website. By using our website, you consent to the use of cookies as described in this policy.
+
+1. What Are Cookies?
+
+Cookies are small text files that are placed on your device (computer, tablet, smartphone) when you visit our website. They serve various purposes, including enhancing your browsing experience, providing analytics data, and delivering personalized content and advertisements.
+
+2. Types of Cookies We Use
+We use different types of cookies for various purposes:
+
+a. Essential Cookies:
+These cookies are necessary for the basic functionality of our website. They enable features such as navigation, login, and access to secure areas. You cannot opt out of essential cookies as they are required for the website to function properly.
+
+b. Analytical Cookies:
+We use analytical cookies to collect information about how you interact with our website. This data helps us understand user behavior, improve our website, and measure the effectiveness of our content. Analytical cookies may include:
+Google Analytics: These cookies are used to track user interactions on our website. You can learn more about Google Analytics and opt out here.
+
+c. Advertising Cookies:
+
+We work with third-party advertising partners to display advertisements on our website. These partners may use advertising cookies to deliver personalized ads based on your interests and online behavior. Advertising cookies may include:
+
+[Ad 1]: You can review their privacy policy and opt-out options on their website.
+[Ad 2]: You can review their privacy policy and opt-out options on their website.
+d. Functional Cookies:
+
+Functional cookies enhance your user experience by remembering your preferences and settings. These cookies may include:
+
+[Function 1]: Description of the function and its purpose.
+[Function 2]: Description of the function and its purpose.
+
+3. How Long Do Cookies Stay on Your Device?
+
+Cookies can have different durations:
+
+Session Cookies: These cookies are temporary and expire when you close your browser.
+Persistent Cookies: Persistent cookies remain on your device for a specified period, even after you close your browser.
+
+4. Managing Cookies
+You can manage and control cookies through your browser settings. Most browsers allow you to refuse or delete cookies. Please note that disabling cookies may affect your experience on our website.
+
+5. Third-Party Cookies
+Some cookies on our website may be set by third-party providers, such as advertising partners and analytics services. These cookies are subject to the privacy policies of the respective third-party providers. You can typically opt out of third-party cookies by visiting the providers' websites.
+
+6. Updates to This Policy
+We may update this Cookie Policy to reflect changes in our cookie usage or legal requirements. Any updates will be posted on this page.
+
+7. Contact Us
+If you have any questions or concerns about our Cookie Policy, please contact us at [Contact Information].
+'''
             copyright_notice = "InCollege © 2023 All Rights Reserved."
 
             about = """ InCollege: We are a community of students who understand the transition from college to the job market. We built this application to assist in this transition.
@@ -112,7 +164,7 @@ class Menu:
                 ('Privacy Policy', self.under_construction),
                 ('Cookie Policy', self.under_construction),
                 ('Copyright Policy', lambda: self.change_mode('useful links')),
-                ('Brand Policy', lambda: print('brand_policy')),
+                ('Brand Policy', lambda: print(brand_policy)),
                 ('Guest Controls', lambda: self.change_mode('guest controls')),
                 ('Languages', lambda: self.change_mode('useful links')),
                 ('Go back', lambda: self.change_mode('main')),
@@ -125,6 +177,7 @@ class Menu:
             ('SMS', lambda: print("SMS", on)),
             ('Targeted Advertising', lambda: print("Targeted Advertising", on)),
             ('Go back', lambda: self.change_mode('incollege links')),
+                   
             ]
 
         return options
