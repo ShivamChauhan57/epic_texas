@@ -3,7 +3,7 @@ import requests
 import pytest
 import sys
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 @pytest.mark.parametrize('user_name, fullname, pw', [('Adam', None, None),
 ('EJry', 'Jerry Excel', 'Fts%sau'), ('EJry', 'Jerry Excel', 'Fts%0421u')])
 def test_signup(monkeypatch, capsys, username, fullname, password):
@@ -21,7 +21,7 @@ def test_signup(monkeypatch, capsys, username, fullname, password):
     captured = capsys.readouterr()
     assert captured.out == "You have successfully signed up! Please log in now." # Ryan Chick 9/25/2023
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 @pytest.mark.parametrize('username, fullname, password', [('EJry', None),
 ('EJr', 'Fts%0421u'), ('EJry','Fts%0421u')])
 def test_login(monkeypatch, capsys, username, password):
@@ -87,3 +87,43 @@ def test_lookup_user(monkeypatch, capsys, firstname, lastname, output):
 
     captured = capsys.readouterr()
     assert captured == output # Ryan Chick 10/1/2023
+
+@pytest.fixture(scope='class')
+@pytest.mark.parametrize('title, description, employer, location, salary', [(None, None, None, None, 0), 
+               ('Software Engineer', 
+                'Can prepare and install solutions by determining and designing system specifications, standards, and programming.', 
+                'Malcom Perrson', 'tampa', '$88568')])
+def test_post_job(monkeypatch, capsys, title, description, employer, location, salary):
+    test_menu = Menu()
+    test_menu.post_job()
+
+    responses = iter([title, description, employer, location, salary])
+    monkeypatch.setattr('builtins.input', lambda _: next(responses))
+
+    captured = capsys.readouterr()
+    assert captured == 'Invalid salary, must be a number which begins with $' # Ryan Chick 10/1/2023
+
+    captured = capsys.readouterr()
+    assert captured == 'Job posting created successfully.' # Ryan Chick 10/1/2023
+
+@pytest.fixture()
+@pytest.mark.parametrize('title, description, employer, location, salary, username', [
+    ('title: Software Engineer', 
+     'description: Can prepare and install solutions by determining and designing system specifications, standards, and programming.', 
+     'employer: Malcom Perrson', 'location: tampa', 'salary: $88568', 'username: Adam')])
+def test_get_job_postings(monkeypatch, capsys, title, description, employer, location, salary, username):
+    test_menu = Menu()
+    test_menu.get_job_postings()
+
+    captured = capsys.readouterr()
+    assert captured == title
+    captured = capsys.readouterr()
+    assert captured == description
+    captured = capsys.readouterr()
+    assert captured == employer
+    captured = capsys.readouterr()
+    assert captured == location
+    captured = capsys.readouterr()
+    assert captured == salary
+    captured = capsys.readouterr()
+    assert captured == username # Ryan Chick 10/1/2023
