@@ -6,6 +6,23 @@ import json
 from pathlib import Path
 import os
 
+class InvalidInputError(ValueError):
+    def __init__(self, message):
+        super().__init__(message)
+
+def get_field(prompt, nullable=False):
+    _input = input(f'{prompt}: ').strip()
+    if any(c.isspace() for c in _input.strip()):
+        raise InvalidInputError('Invalid entry, must not contain whitespace.')
+    
+    if len(_input) == 0:
+        if nullable:
+            return None
+        else:
+            raise InvalidInputError('Cannot pass an empty message to this field.')
+
+    return _input
+
 class Menu:
     def __init__(self, url):
         self.url = url
@@ -21,14 +38,16 @@ class Menu:
     def main(self):
         while True:
             options, actions = tuple(zip(*self.options()))
-            print('Availaible actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
+            print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
 
             try:
                 action = actions[int((input('Enter choice (enter the index): ')).strip()) - 1]
                 action()
+            except InvalidInputError as e:
+                print(e)
             except (ValueError, IndexError):
                 print('Invalid response, try again.')
-            
+
             print()
 
     def options(self):
@@ -38,7 +57,7 @@ class Menu:
                 ('InCollege Video', lambda: print('Video is now playing')),
                 ('Log in', self.login),
                 ('Sign up', self.signup),
-                ('Lookup user', self.lookup_user),
+                ('Lookup users', self.lookup_users),
                 ('Discover users', self.discover_users),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
@@ -49,11 +68,17 @@ class Menu:
                 self.change_mode('log-in')
                 return self.options()
 
+            if len(self.view_requests()) > 0:
+                print('You have pending connection requests to accept or deny.')
+
             options = [
                 ('See profile', self.see_profile),
                 ('Discover users', self.discover_users),
-                ('Follow a user', self.follow),
-                ('See your followers', self.list_followers),
+                ('Lookup users', self.lookup_users),
+                ('Send connection requests', self.send_connection_request),
+                ('View requests', self.consider_requests),
+                ('Show my network', self.view_connections),
+                ('Disconnect from a user', self.disconnect),
                 ('Job search/internship', lambda: self.change_mode('job search/internship')),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
@@ -101,7 +126,7 @@ class Menu:
                 'Brand Policy': 'brand-policy.txt'
             }
 
-            options = [(document, lambda textfile=textfile: print(Path(f'./documents/{textfile}').read_text().strip()))
+            options = [(document, lambda textfile=textfile: print(Path(os.path.join(os.path.dirname(__file__), 'documents', textfile)).read_text().strip()))
                 for document, textfile in documents.items()]
 
             if self.access_token:
@@ -118,14 +143,15 @@ class Menu:
                 print('Error fetching user preferences')
                 return [('Go back', lambda: self.change_mode('incollege links'))]
 
-            # ['email_notifications_enabled', 'sms_notifications_enabled', 'targeted_advertising_enabled', 'language']
-            options = [(f'Turn {option} {"Off" if toggle else "On"}',
-                lambda field=field, toggle=toggle: self.set_user_preferences(field, not toggle))
-                for field, option, toggle in [
+            options = []
+            for field, option, value in [
                     ('email_notifications_enabled', 'InCollege Email', self.email_notifications_enabled),
                     ('sms_notifications_enabled', 'SMS', self.sms_notifications_enabled),
                     ('targeted_advertising_enabled', 'Targeted Advertising', self.targeted_advertising_enabled)
-                ]]
+                ]:
+                options.append((f'Turn {option} {"Off" if value else "On"}',
+                    lambda field=field, value=value: self.set_user_preferences(field, not value)))
+
             options.append(('Go back', lambda: self.change_mode('incollege links')))
         elif self.mode == 'languages':
             options = [
@@ -143,7 +169,7 @@ class Menu:
         print('Under construction')
         
     def login(self):
-        username = input('Please enter your username: ')
+        username = get_field('Please enter your username')
         passwordHash = hashlib.sha256(getpass('Enter your password: ').strip().encode()).hexdigest()
 
         data = {
@@ -170,19 +196,28 @@ class Menu:
             except:
                 return False    # signing up will be unsuccessful regardless
 
-        username = input('Please enter your username: ')
+        def validate_password(password):
+            def special(c):
+                digit = 0 <= ord(c) - ord('0') < 10
+                letter = 0 <= ord(c.lower()) - ord('a') < 26
+                return not (digit or letter or c.isspace())
+
+            contains_digit = any(chr(ord('0') + i) in password for i in range(10))
+            contains_capital = any(chr(ord('A') + i) in password for i in range(ord('Z') - ord('A') + 1))
+            contains_special = any(special(c) for c in password)
+
+            return 8 <= len(password) <= 12 and contains_digit and contains_capital and contains_special
+
+        username = get_field('Please enter your username')
         if username_exists(username):
             print('Username not available!')
             return
 
-        fullname = input('Please enter your full name: ').strip().split(' ')
-        if len(fullname) < 2:
-            print('Enter your full name!')
-            return
+        data = { field: get_field(f'Please enter your {field}') for field in ['firstname', 'lastname', 'university', 'major'] }
 
         password = getpass('Enter your password: ').strip()
-        if not (len(password) >= 8 and any(chr(ord('0') + i) in password for i in range(10))):
-            print('Password is not secure, should be at least eight characters and must contain a number.')
+        if not validate_password(password):
+            print('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
             return
 
         if getpass('Confirm your password: ').strip() != password:
@@ -191,8 +226,7 @@ class Menu:
 
         data = {
             'username': username,
-            'firstname': fullname[0],
-            'lastname': fullname[-1],
+            **data,
             'passwordHash': hashlib.sha256(password.encode()).hexdigest()
         }
 
@@ -200,7 +234,11 @@ class Menu:
         if response.status_code == 200:
             print('You have successfully signed up! Please log in now.')
         else:
-            print('Sign up unsuccessful. Please try again.')
+            if response.json() == { 'error': 'Limit of ten users has been reached' }:
+                print('All permitted accounts have been created, please come back later.')
+            else:
+                print(response.json())
+                print('Sign up unsuccessful. Please try again.')
 
     def see_profile(self):
         response = requests.get(f'{self.url}/profile', headers={ 'Authorization': f'Bearer {self.access_token}' })
@@ -225,48 +263,120 @@ class Menu:
         else:
             print('No users yet.')
 
-    def lookup_user(self):
-        firstname = input('Enter the user\'s first name: ').strip()
-        lastname = input('Enter the user\'s last name: ').strip()
+    def lookup_users(self):
+        fields = { field: get_field(f'Enter the user\'s {field} (leave empty and press enter to skip)', nullable=True)
+            for field in ['firstname', 'lastname', 'university', 'major'] }
+        fields = {field: fields[field] for field in fields if fields[field]}
+        if len(fields) == 0:
+            raise InvalidInputError('You skipped all conditions!')
+            return
 
-        response = requests.post(f'{self.url}/lookup-user', data=json.dumps({ 'firstname': firstname, 'lastname': lastname }))
+        response = requests.post(f'{self.url}/lookup-user', data=json.dumps(fields))
 
         if response.status_code == 200:
-            if response.json()['matches']:
-                print(f'{firstname} {lastname} is a part of the InCollege system.')
+            matches = response.json()['matches']
+            if len(matches) > 0:
+                print(f'Matches:')
+                print('\n'.join(' '.join(user.values()) for user in matches))
             else:
-                print(f'{firstname} {lastname} is not yet a part of the InCollege system yet.')
+                print(f'Nobody matches these criteria.')
+                return
         else:
             print('Unable to lookup whether user is part of the InCollege system')
+            return
 
-    def follow(self):
-        user_to_follow = input('Enter the username of the user to follow: ')
-        response = requests.post(f'{self.url}/follow', data=json.dumps({ 'username': user_to_follow }), headers={ 'Authorization': f'Bearer {self.access_token}' })
+        if not self.access_token:
+            return
+
+        request_target = get_field('Would you like to connect to any of the matches? If so, enter their username. If not, simply press enter', nullable=True)
+        if request_target == None:
+            return
+        if not any(user['username'] == request_target for user in matches):
+            raise InvalidInputError(f'{request_target} isn\'t one of the matches.')
+
+        self.send_connection_request(request_target)
+
+    def send_connection_request(self, username=None):
+        if username == None:
+            username = get_field('Enter the username of the person to connect with')
+
+        response = requests.post(f'{self.url}/make-connection-request', data=json.dumps({ 'username': username }),
+            headers={ 'Authorization': f'Bearer {self.access_token}' })
 
         if response.status_code == 200:
-            print(f'You are now following {user_to_follow}')
+            print('Connection request successfully sent.')
         elif response.status_code == 401:
-            print(f'Unable to follow {user_to_follow}: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+            print(f'Unable to send {username} a connection request: \
+permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
         else:
-            print(f'Unable to follow {user_to_follow}.')
+            print(f'Unable to send {username} a connection request')
 
-    def list_followers(self):
-        response = requests.get(f'{self.url}/followers', headers={ 'Authorization': f'Bearer {self.access_token}' })
+    def view_requests(self):
+        response = requests.get(f'{self.url}/pending-requests', headers={ 'Authorization': f'Bearer {self.access_token}' })
         if response.status_code == 200:
-            if len(users := response.json()):
-                for user in users:
-                    print(' '.join(user.values()))
+            return response.json()
+        else:
+            return None
+
+    def consider_requests(self):
+        connection_requests = self.view_requests()
+        if connection_requests == None:
+            print('Error retrieving connection requests.')
+            return
+        elif len(connection_requests) == 0:
+            print('You have no connection requests.')
+            return
+
+        print('Incoming connection requests:')
+        print('\n'.join(' '.join(user.values()) for user in connection_requests))
+
+        users_to_accept = input('Enter the usernames of the users to accept (separated by a space). Leave empty to accept no requests: ').strip().split(' ')
+        users_to_deny = input('Enter the usernames of the users to deny (separated by a space). Leave empty to deny no requests: ').strip().split(' ')
+
+        data = {
+            'users-to-accept': [{ 'username': username } for username in users_to_accept if username != ''],
+            'users-to-deny': [{ 'username': username } for username in users_to_deny if username != '']
+        }
+
+        response = requests.post(f'{self.url}/accept-requests', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
+        if response.status_code == 200:
+            accepted, denied, ignored = tuple(response.json()[field] for field in ['accepted', 'denied', 'ignored'])
+            if len(accepted):
+                print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
+            if len(denied):
+                print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
+            if len(ignored):
+                print('\n'.join(f'You do not have a connection request from {user["username"]}.' for user in ignored))
+        elif response.status_code == 401:
+            print('Unable to consider requests: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+        else:
+            print('Unable to consider requests.')
+
+    def view_connections(self):
+        response = requests.get(f'{self.url}/connections', headers={ 'Authorization': f'Bearer {self.access_token}' })
+        if response.status_code == 200:
+            connections = response.json()
+            if len(connections) > 0:
+                print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in connections))
             else:
-                print('You have no followers')
+                print('You have no connections.')
         elif response.status_code == 401:
-            print(f'Error retrieving follower list: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+            print('Unable to view current connections: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
         else:
-            print('Error retrieving follower list')
+            print('Unable to view current connections.')
+
+    def disconnect(self):
+        username = get_field('Enter the username of the user to disconnect')
+        response = requests.post(f'{self.url}/disconnect', data=json.dumps({ 'username': username }), headers={ 'Authorization': f'Bearer {self.access_token}' })
+        if response.status_code == 200:
+            print(f'Successfully disconnected from {username}.')
+        elif response.status_code == 401:
+            print(f'Unable to disconnect from {username}: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+        else:
+            print(f'Unable to disconnect from {username}.')
 
     def post_job(self):
-        data = dict()
-        for field in ['title', 'description', 'employer', 'location', 'salary']:
-            data[field] = input(f'Enter the {field}: ').strip()
+        data = {get_field(f'Enter the {field}') for field in ['title', 'description', 'employer', 'location', 'salary']}
         try:
             assert data['salary'][0] == '$'
             data['salary'] = int(data['salary'][1:])
@@ -274,11 +384,14 @@ class Menu:
             print('Invalid salary, must be a number which begins with $')
             return
 
-        response = requests.post(f'{self.url}/post-job', data=json.dumps(data), headers={ 'Content-Type': 'application/json', 'Authorization': f'Bearer {self.access_token}' })
+        response = requests.post(f'{self.url}/post-job', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
         if response.status_code == 200:
             print('Job posting created successfully.')
         else:
-            print('Error creating job posting.')
+            if response.json() == { 'error': 'Limit of five job postings has been reached' }:
+                print('Limit of five job postings has been reached')
+            else:
+                print('Error creating job posting.')
 
     def get_job_postings(self):
         response = requests.get(f'{self.url}/job-postings')
@@ -314,7 +427,7 @@ class Menu:
             print(f'Error updating {field} to {value}')
 
 if __name__ == '__main__':
-    print('Here is a student success story from Raunak Chhatwal: I was a struggling student with a 2.069 GPA and no internship, so my hopes were down. Fortunately, with InCollege, I was able to land an entry level position with the mighty Sinaloa cartel in their armed robotics division.\n')
+    print(Path('./documents/success-story.txt').read_text().strip() + '\n')
 
     url = sys.argv[1] if len(sys.argv) > 1 else 'http://raunak.us'
     menu = Menu(url)

@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 import time
 import jwt
+import sqlite3
 
 def list_users(conn):
     cursor = conn.cursor()
@@ -11,16 +12,19 @@ def list_users(conn):
     return [{label: user[i] for i, label in enumerate(['username', 'firstname', 'lastname'])} for user in users], 200
 
 def lookup_user(conn, data):
-    try:
-        firstname, lastname = tuple(data[label] for label in ['firstname', 'lastname'])
-    except KeyError:
-        return {'error': 'Missing data.'}, 400
+    fields = ['firstname', 'lastname', 'university', 'major']
+    if any(field not in fields for field in data):
+        return {'error': 'Invalid fields.'}, 400
+    fields = list(data.keys())
 
     cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users WHERE firstname=? AND lastname=?', (firstname, lastname))
-    matches = cursor.fetchone()[0]
-    
-    return { 'matches': matches }, 200
+    cursor.execute('SELECT username, firstname, lastname FROM users WHERE ' + ' AND '.join(f'{field}=?' for field in fields),
+        tuple(data[field] for field in fields))
+    matches = cursor.fetchall()
+
+    return { 'matches': [{
+            field: user[i] for i, field in enumerate(['username', 'firstname', 'lastname'])
+        } for user in matches] }, 200
 
 def log_in(conn, data):
     try:
@@ -29,7 +33,7 @@ def log_in(conn, data):
         return {'error': 'Missing data, both username and password are required.'}, 400
 
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, passwordHash FROM users WHERE username=?", (username,))
+    cursor.execute('SELECT id, username, passwordHash FROM users WHERE username=?', (username,))
     user = cursor.fetchone()
 
     if user is None:
@@ -51,31 +55,33 @@ def log_in(conn, data):
     return {'token': token}, 200
 
 def add_user(conn, data):
-    try:
-        username, firstname, lastname, passwordHash = tuple(data[label] for label in ['username', 'firstname', 'lastname', 'passwordHash'])
-    except KeyError:
-        return {'error': 'Missing data, all fields are required.'}, 400
+    fields = ['username', 'firstname', 'lastname', 'university', 'major', 'passwordHash']
+    if set(data.keys()) != set(fields):
+        return {'error': 'Invalid fields.'}, 400
+
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users')
+    num_users = cursor.fetchone()[0]
+    if num_users >= 10:
+        return { 'error': 'Limit of ten users has been reached' }, 400
 
     try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, firstname, lastname, passwordHash) VALUES (?, ?, ?, ?)",
-                    (username, firstname, lastname, passwordHash))
+        cursor.execute(f'INSERT INTO users ({", ".join(fields)}) VALUES ({", ".join("?"*len(fields))})',
+                tuple(data[field] for field in fields))
         conn.commit()
-        
+
         # Retrieve the new user's id
         user_id = cursor.lastrowid
     except sqlite3.IntegrityError:
         # This error will be raised if the username is not unique
         return {'error': 'The username you chose has already been taken.'}, 400
 
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO user_preferences (user_id, email_notifications_enabled, sms_notifications_enabled, targeted_advertising_enabled, language) VALUES (?, ?, ?, ?, ?)",
-                (user_id, True, True, True, 'english'))
+    cursor.execute('''INSERT INTO user_preferences
+        (user_id, email_notifications_enabled, sms_notifications_enabled, targeted_advertising_enabled, language)
+        VALUES (?, ?, ?, ?, ?)''', (user_id, True, True, True, 'english'))
     conn.commit()
 
-    response = {'id': user_id, 'username': username, 'firstname': firstname, 'lastname': lastname}
-
-    return response, 200
+    return { 'success': 'User successfully added' }, 200
 
 def get_profile(conn, user):
     user_id = user[0]
@@ -86,42 +92,129 @@ def get_profile(conn, user):
 
     return {label: profile[i] for i, label in enumerate(['username', 'firstname', 'lastname'])}, 200
 
-def follow(conn, data, user):
+def make_connection_request(conn, data, user):
     target_username = data.get('username')
-
-    if not target_username:
+    if target_username == None:
         return {'error': 'Missing username.'}, 400
 
     if user[1] == target_username:
-        return {'error': 'You cannot follow yourself.'}, 400
+        return {'error': 'You cannot connect with yourself.'}, 400
 
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE username=?", (target_username,))
+    cursor.execute('SELECT id FROM users WHERE username=?', (target_username,))
     target = cursor.fetchone()
-
     if not target:
         return {'error': 'User not found.'}, 404
 
     target_id = target[0]
     user_id = user[0]
-    
-    try:
-        cursor.execute("INSERT INTO followers (user_id, follower_id) VALUES (?, ?)", (target_id, user_id))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        return {'error': 'You are already following this user.'}, 400
 
-    return {'message': f'You are now following {target_username}'}, 200
+    cursor.execute('''SELECT COUNT(*) FROM connections
+        WHERE (user_id = ? AND connection_id = ?)
+        OR (user_id = ? AND connection_id = ?)''', (user_id, target_id, target_id, user_id))
+    matches = cursor.fetchone()[0]
+    if matches > 0:
+        return { 'error': 'Either you are already following each other or one of you has an open connection request to the other.' }, 400
 
-def get_followers(conn, user):
-    user_id = user[0] # get the user_id from the authenticated user tuple
+    cursor.execute('INSERT INTO connections (user_id, connection_id, request_status) VALUES (?, ?, "pending")', (user_id, target_id))
+    conn.commit()
+
+    return {'message': f'Connection request sent to {target_username}'}, 200
+
+def pending_requests(conn, user):
+    user_id = user[0]
     
     cursor = conn.cursor()
-    cursor.execute("SELECT u.username, u.firstname, u.lastname FROM users u JOIN followers f ON u.id = f.follower_id WHERE f.user_id = ?", (user_id,))
-    followers = cursor.fetchall()
+    cursor.execute('''SELECT u.username, u.firstname, u.lastname
+        FROM users u JOIN connections c ON u.id = c.user_id
+        WHERE c.connection_id = ? AND c.request_status = "pending"''', (user_id,))
+    pending_connection_requests = cursor.fetchall()
 
-    # return [follower[0] for follower in followers], 200
-    return [{label: follower[i] for i, label in enumerate(['username', 'firstname', 'lastname'])} for follower in followers], 200
+    return [{label: request_sender[i] for i, label in
+        enumerate(['username', 'firstname', 'lastname'])} for request_sender in pending_connection_requests], 200
+
+def accept_requests(conn, data, user):
+    users_to_accept = data.get('users-to-accept', [])
+    users_to_deny = data.get('users-to-deny', [])
+
+    user_id = user[0]
+
+    accepted, denied, ignored = [], [], []
+
+    cursor = conn.cursor()
+    conn.execute('BEGIN TRANSACTION')
+    try:
+        for username in users_to_accept + users_to_deny:
+            username = username['username']
+
+            cursor.execute('''SELECT u.id
+                FROM connections c JOIN users u ON c.user_id = u.id
+                WHERE u.username = ? AND c.connection_id = ? AND c.request_status = "pending"''',
+                (username, user_id))
+            request_sender_id = cursor.fetchone()
+            if request_sender_id == None:
+                ignored.append({ 'username': username })
+                continue
+            else:
+                request_sender_id = request_sender_id[0]
+
+            if username in [user['username'] for user in users_to_accept]:
+                cursor.execute('''UPDATE connections SET request_status = "accepted"
+                    WHERE user_id = ? AND connection_id = ?''', (request_sender_id, user_id))
+                accepted.append({ 'username': username })
+            elif username in [user['username'] for user in users_to_deny]:
+                cursor.execute('''DELETE FROM connections
+                    WHERE user_id = ? AND connection_id = ?''', (request_sender_id, user_id))
+                denied.append({ 'username': username })
+            else:
+                raise Exception('There is a bug in this part of code.')
+
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    return { 'accepted': accepted, 'denied': denied, 'ignored': ignored }, 200
+
+def connections(conn, user):
+    user_id = user[0]
+    
+    cursor = conn.cursor()
+    cursor.execute('''SELECT u.username, u.firstname, u.lastname
+        FROM users u JOIN connections c ON (
+            (u.id = c.user_id AND c.connection_id = ?)
+            OR (u.id = c.connection_id AND c.user_id = ?)
+        ) WHERE c.request_status = "accepted"''', (user_id, user_id))
+    pending_connection_requests = cursor.fetchall()
+
+    return [{label: request_sender[i] for i, label in
+        enumerate(['username', 'firstname', 'lastname'])} for request_sender in pending_connection_requests], 200
+
+def disconnect(conn, data, user):
+    user_id = user[0]
+    
+    username_to_disconnect = data.get('username')
+    if username_to_disconnect == None:
+        return { 'error': 'FORMAT: { \'username\': username }'}, 400
+
+    cursor = conn.cursor()
+    cursor.execute('''SELECT u.id
+        FROM connections c JOIN users u ON c.user_id = u.id
+        WHERE (c.user_id = ? OR c.connection_id = ?)
+        AND u.username = ? AND c.request_status = "accepted"''',
+        (user_id, user_id, username_to_disconnect))
+    connection_id = cursor.fetchall()
+    if len(connection_id) == 0:
+        return { 'error': f'you are not connected with {username_to_disconnect}.' }, 400
+    else:
+        connection_id = connection_id[0][0]
+        print(connection_id)
+
+    cursor.execute('''DELETE FROM connections
+        WHERE user_id = ? AND connection_id = ?''', (connection_id, user_id))
+    return { 'success': f'successfully disconnected from {username_to_disconnect}' }, 200
 
 def post_job(conn, data, user):
     try:
@@ -129,9 +222,15 @@ def post_job(conn, data, user):
     except KeyError:
         return {'error': 'Missing data, all fields are required.'}, 400
 
-    user_id = user[0]
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO job_postings (title, description, employer, location, salary, user_id) VALUES (?, ?, ?, ?, ?, ?)", (title, description, employer, location, salary, user_id))
+    cursor.execute('SELECT COUNT(*) FROM job_postings')
+    num_job_postings = cursor.fetchone()[0]
+    if num_job_postings >= 5:
+        return { 'error': 'Limit of five job postings has been reached' }, 400
+
+    user_id = user[0]
+    cursor.execute('INSERT INTO job_postings (title, description, employer, location, salary, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+        (title, description, employer, location, salary, user_id))
     conn.commit()
 
     return {'message': 'Job posting created successfully.'}, 200
@@ -163,6 +262,11 @@ def set_user_preferences(conn, data, user):
     if len(data) != 1:
         return {'error': 'FORMAT: { field: value }'}, 400
     field, value = list(data.items())[0]
+    if field not in ['email_notifications_enabled',
+        'sms_notifications_enabled',
+        'targeted_advertising_enabled',
+        'language']:
+        return {'error': f'Invalid field: {field}'}
 
     cursor = conn.cursor()
     cursor.execute(f'UPDATE user_preferences SET {field} = ? WHERE user_id = ?', (value, user_id))
@@ -176,7 +280,8 @@ def set_user_preferences(conn, data, user):
 get_requests = {
     '/list-users': list_users,
     '/profile': get_profile,
-    '/followers': get_followers,
+    '/pending-requests': pending_requests,
+    '/connections': connections,
     '/job-postings': get_job_postings,
     '/user-preferences': get_user_preferences
 }
@@ -185,7 +290,9 @@ post_requests = {
     '/lookup-user': lookup_user,
     '/login': log_in,
     '/add-user': add_user,
-    '/follow': follow,
+    '/make-connection-request': make_connection_request,
+    '/accept-requests': accept_requests,
+    '/disconnect': disconnect,
     '/post-job': post_job,
     '/set-user-preferences': set_user_preferences
 }
