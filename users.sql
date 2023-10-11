@@ -3,8 +3,7 @@ CREATE TABLE users (
     username TEXT UNIQUE,
     firstname TEXT,
     lastname TEXT,
-    passwordHash TEXT
-    
+    passwordHash TEXT 
 );
 
 CREATE TABLE followers (
