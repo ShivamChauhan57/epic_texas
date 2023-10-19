@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 import os
 
-class InvalidInputError(ValueError):
+class InvalidInputError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
+class StatusCodeError(Exception):
     def __init__(self, message):
         super().__init__(message)
 
@@ -43,7 +47,7 @@ class Menu:
             try:
                 action = actions[int((input('Enter choice (enter the index): ')).strip()) - 1]
                 action()
-            except InvalidInputError as e:
+            except (InvalidInputError, StatusCodeError) as e:
                 print(e)
             except (ValueError, IndexError):
                 print('Invalid response, try again.')
@@ -68,7 +72,8 @@ class Menu:
                 self.change_mode('log-in')
                 return self.options()
 
-            if len(self.view_requests()) > 0:
+            response = self.get(f'/pending-requests', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
                 print('You have pending connection requests to accept or deny.')
 
             options = [
@@ -167,23 +172,54 @@ class Menu:
 
     def under_construction(self):
         print('Under construction')
-        
+
+    def get(self, path, error_msg=None, authenticate=False):
+        assert path.startswith('/'), f'Invalid path: {path}.'
+
+        headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
+        response = requests.get(f'{self.url}{path}', headers=headers)
+        if error_msg is None:
+            return response
+
+        if authenticate and response.status_code == 401:
+            if error_msg.endswith('.'):
+                error_msg = error_msg[:-1]
+            error_msg += ': permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.'
+
+        if response.status_code != 200:
+            raise StatusCodeError(error_msg)
+
+        return response.json()
+
+    def post(self, path, data, error_msg=None, authenticate=False):
+        assert path.startswith('/'), f'Invalid path: {path}.'
+
+        headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
+        headers['Content-Type'] = 'application/json'
+        response = requests.post(f'{self.url}{path}', data=json.dumps(data), headers=headers)
+        if error_msg is None:
+            return response
+
+        if authenticate and response.status_code == 401:
+            if error_msg.endswith('.'):
+                error_msg = error_msg[:-1]
+            error_msg += ': permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.'
+
+        if response.status_code != 200:
+            raise StatusCodeError(error_msg)
+
+        return response.json()
+
     def login(self):
         username = get_field('Please enter your username')
         passwordHash = hashlib.sha256(getpass('Enter your password: ').strip().encode()).hexdigest()
 
-        data = {
+        self.access_token = self.post('/login', {
             'username': username,
             'passwordHash': passwordHash
-        }
-
-        response = requests.post(f'{self.url}/login', data=json.dumps(data), headers={ 'Content-Type': 'application/json' })
-        if response.status_code == 200:
-            self.access_token = response.json()['token']
-            print('Login successful.')
-            self.change_mode('main')
-        else:
-            print('Login unsuccessful.')
+        }, error_msg='Login unsuccessful.')['token']
+        print('Login successful.')
+        self.change_mode('main')
 
     def logout(self):
         self.access_token = None
@@ -192,7 +228,7 @@ class Menu:
     def signup(self):
         def username_exists(username):
             try:
-                return any(username == user['username'] for user in requests.get(f'{self.url}/list-users').json())
+                return any(username == user['username'] for user in self.get('/list-users').json())
             except:
                 return False    # signing up will be unsuccessful regardless
 
@@ -208,12 +244,15 @@ class Menu:
 
             return 8 <= len(password) <= 12 and contains_digit and contains_capital and contains_special
 
-        username = get_field('Please enter your username')
-        if username_exists(username):
+        data = {'username': get_field('Please enter your username')}
+        if username_exists(data['username']):
             print('Username not available!')
             return
 
-        data = { field: get_field(f'Please enter your {field}') for field in ['firstname', 'lastname', 'university', 'major'] }
+        data['firstname'] = get_field(f'Please enter your first name')
+        data['lastname'] = get_field(f'Please enter your last name')
+        data['university'] = get_field(f'Please enter your university', whitespace=True)
+        data['major'] = get_field(f'Please enter your subject major', whitespace=True)
 
         password = getpass('Enter your password: ').strip()
         if not validate_password(password):
@@ -224,72 +263,53 @@ class Menu:
             print('Passwords don\'t match!')
             return
 
-        data = {
-            'username': username,
-            **data,
-            'passwordHash': hashlib.sha256(password.encode()).hexdigest()
-        }
+        data['passwordHash'] = hashlib.sha256(password.encode()).hexdigest()
 
-        response = requests.post(f'{self.url}/add-user', data=json.dumps(data), headers={ 'Content-Type': 'application/json' })
+        response = self.post('/add-user', data)
         if response.status_code == 200:
             print('You have successfully signed up! Please log in now.')
         else:
             if response.json() == { 'error': 'Limit of ten users has been reached' }:
                 print('All permitted accounts have been created, please come back later.')
             else:
-                print(response.json())
                 print('Sign up unsuccessful. Please try again.')
 
     def see_profile(self):
-        response = requests.get(f'{self.url}/profile', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            username, firstname, lastname = tuple(response.json().values())
-            print(f'Username: {username}')
-            print(f'First name: {firstname}')
-            print(f'Last name: {lastname}')
-        elif response.status_code == 401:
-            print('Error retrieving profile info: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print('Error retrieving profile info.')
+        response = self.get('/profile', error_msg='Error retrieving profile info.', authenticate=True)
+        print('\n'.join(f'{field}: {response[field]}' for field in ['username', 'firsname', 'lastname']))
 
     def discover_users(self):
-        response = requests.get(f'{self.url}/list-users')
-        if response.status_code != 200:
-            print('Error retrieving user list')
-
-        if len(users := response.json()):
+        users = self.get('/list-users', error_msg='Error retrieving user list.')
+        if len(users):
             for user in users:
                 print(' '.join(user.values()))
         else:
             print('No users yet.')
 
     def lookup_users(self):
-        fields = { field: get_field(f'Enter the user\'s {field} (leave empty and press enter to skip)', nullable=True)
-            for field in ['firstname', 'lastname', 'university', 'major'] }
+        fields = {
+            'firstname': get_field(f'Enter the user\'s first name (leave empty and press enter to skip)', nullable=True),
+            'lastname': get_field(f'Enter the user\'s last name (leave empty and press enter to skip)', nullable=True),
+            'university': get_field(f'Enter the user\'s university name (leave empty and press enter to skip)', whitespace=True, nullable=True),
+            'major': get_field(f'Enter the user\'s subject major (leave empty and press enter to skip)', whitespace=True, nullable=True)
+        }
         fields = {field: fields[field] for field in fields if fields[field]}
         if len(fields) == 0:
             raise InvalidInputError('You skipped all conditions!')
-            return
 
-        response = requests.post(f'{self.url}/lookup-user', data=json.dumps(fields))
-
-        if response.status_code == 200:
-            matches = response.json()['matches']
-            if len(matches) > 0:
-                print(f'Matches:')
-                print('\n'.join(' '.join(user.values()) for user in matches))
-            else:
-                print(f'Nobody matches these criteria.')
-                return
+        matches = self.post('/lookup-user', fields, error_msg='Unable to lookup whether user is part of the InCollege system.')['matches']
+        if len(matches) > 0:
+            print(f'Matches:')
+            print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in matches))
         else:
-            print('Unable to lookup whether user is part of the InCollege system')
+            print(f'Nobody matches these criteria.')
             return
 
         if not self.access_token:
             return
 
-        request_target = get_field('Would you like to connect to any of the matches? If so, enter their username. If not, simply press enter', nullable=True)
-        if request_target == None:
+        request_target = get_field('Would you like to connect to any one of the matches displayed above? If so, enter their username. If not, simply press enter', nullable=True)
+        if request_target is None:
             return
         if not any(user['username'] == request_target for user in matches):
             raise InvalidInputError(f'{request_target} isn\'t one of the matches.')
@@ -300,30 +320,13 @@ class Menu:
         if username == None:
             username = get_field('Enter the username of the person to connect with')
 
-        response = requests.post(f'{self.url}/make-connection-request', data=json.dumps({ 'username': username }),
-            headers={ 'Authorization': f'Bearer {self.access_token}' })
-
-        if response.status_code == 200:
-            print('Connection request successfully sent.')
-        elif response.status_code == 401:
-            print(f'Unable to send {username} a connection request: \
-permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print(f'Unable to send {username} a connection request')
-
-    def view_requests(self):
-        response = requests.get(f'{self.url}/pending-requests', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
+        self.post('/make-connection-request', { 'username': username },
+            error_msg=f'Unable to send {username} a connection request.', authenticate=True)
+        print('Connection request successfully sent.')
 
     def consider_requests(self):
-        connection_requests = self.view_requests()
-        if connection_requests == None:
-            print('Error retrieving connection requests.')
-            return
-        elif len(connection_requests) == 0:
+        connection_requests = self.get('/pending-requests', error_msg='You have no connection requests.', authenticate=True)
+        if len(connection_requests) == 0:
             print('You have no connection requests.')
             return
 
@@ -338,42 +341,26 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             'users-to-deny': [{ 'username': username } for username in users_to_deny if username != '']
         }
 
-        response = requests.post(f'{self.url}/accept-requests', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            accepted, denied, ignored = tuple(response.json()[field] for field in ['accepted', 'denied', 'ignored'])
-            if len(accepted):
-                print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
-            if len(denied):
-                print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
-            if len(ignored):
+        response = self.post(f'/accept-requests', data, error_msg='Unable to consider requests.', authenticate=True)
+        accepted, denied, ignored = tuple(response[field] for field in ['accepted', 'denied', 'ignored'])
+        if len(accepted):
+            print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
+        if len(denied):
+            print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
+        if len(ignored):
                 print('\n'.join(f'You do not have a connection request from {user["username"]}.' for user in ignored))
-        elif response.status_code == 401:
-            print('Unable to consider requests: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print('Unable to consider requests.')
 
     def view_connections(self):
-        response = requests.get(f'{self.url}/connections', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            connections = response.json()
-            if len(connections) > 0:
-                print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in connections))
-            else:
-                print('You have no connections.')
-        elif response.status_code == 401:
-            print('Unable to view current connections: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+        connections = self.get('/connections', error_msg='Unable to view current connections.', authenticate=True)
+        if len(connections) > 0:
+            print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in connections))
         else:
-            print('Unable to view current connections.')
+            print('You have no connections.')
 
     def disconnect(self):
         username = get_field('Enter the username of the user to disconnect')
-        response = requests.post(f'{self.url}/disconnect', data=json.dumps({ 'username': username }), headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            print(f'Successfully disconnected from {username}.')
-        elif response.status_code == 401:
-            print(f'Unable to disconnect from {username}: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print(f'Unable to disconnect from {username}.')
+        self.post('/disconnect', { 'username': username }, error_msg=f'Unable to disconnect from {username}.', authenticate=True)
+        print(f'Successfully disconnected from {username}.')
 
     def post_job(self):
         data = {field: get_field(f'Enter the {field}', whitespace=True) for field in ['title', 'description', 'employer', 'location', 'salary']}
@@ -384,7 +371,7 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             print('Invalid salary, must be a number which begins with $')
             return
 
-        response = requests.post(f'{self.url}/post-job', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
+        response = self.post('/post-job', data, authenticate=True)
         if response.status_code == 200:
             print('Job posting created successfully.')
         else:
@@ -394,12 +381,9 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
                 print('Error creating job posting.')
 
     def get_job_postings(self):
-        response = requests.get(f'{self.url}/job-postings')
-        if response.status_code != 200:
-            print('Error fetching job postings.')
-            return
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
 
-        if len(job_postings := response.json()):
+        if len(job_postings) > 0:
             for posting in job_postings:
                 posting['salary'] = f'${posting["salary"]}'
                 print('\n'.join(f'{key}: {value}' for key, value in posting.items()))
@@ -407,24 +391,24 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             print('No job postings found.')
 
     def fetch_user_preferences(self):
-        response = requests.get(f'{self.url}/user-preferences', headers={ 'Authorization': f'Bearer {self.access_token}' })
+        response = self.get('/user-preferences', authenticate=True)
 
+        fields = [
+            'email_notifications_enabled',
+            'sms_notifications_enabled',
+            'targeted_advertising_enabled',
+            'language'
+        ]
         if response.status_code == 200:
-            self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language = response.json().values()
+            for field in fields:
+                setattr(self, field, response.json()[field])
         else:
-            self.email_notifications_enabled = None
-            self.sms_notifications_enabled = None
-            self.targeted_advertising_enabled = None
-            self.language = None
+            for field in fields:
+                setattr(self, field, None)
 
     def set_user_preferences(self, field, value):
-        response = requests.post(f'{self.url}/set-user-preferences',
-            data=json.dumps({ field: value }),
-            headers={ 'Content-Type': 'application/json', 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            print('Successfully updated user preferences.')
-        else:
-            print(f'Error updating {field} to {value}')
+        response = self.post('/set-user-preferences', { field: value }, error_msg=f'Error updating {field} to {value}', authenticate=True)
+        print('Successfully updated user preferences.')
 
 if __name__ == '__main__':
     print(Path('./documents/success-story.txt').read_text().strip() + '\n')
