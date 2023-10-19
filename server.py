@@ -4,10 +4,12 @@ import socketserver
 import time
 import json
 import sys
-import sqlite3
 import inspect
 from pathlib import Path
 import jwt
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+from models import Base
 
 from request_handlers import get_requests, post_requests
 
@@ -35,8 +37,9 @@ def handle_request(self, request_type):
             self.send_error(401)
             return
 
-    with sqlite3.connect('users.db') as conn:
-        response, status = request_handler(conn, **kwargs)
+    session = Session()
+    with session.begin():
+        response, status = request_handler(session, **kwargs)
 
     response = json.dumps(response)
 
@@ -54,6 +57,9 @@ class MyRequestHandler(http.server.SimpleHTTPRequestHandler):
     do_POST = lambda self: handle_request(self, 'post')
 
 if __name__ == '__main__':
+    engine = create_engine('sqlite:///users.db')
+    Session = sessionmaker(bind=engine)
+
     with ThreadedHTTPServer(('0.0.0.0', PORT), MyRequestHandler) as httpd:
         print(f'Serving on port {PORT}')
         httpd.serve_forever()

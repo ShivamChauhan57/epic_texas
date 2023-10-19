@@ -10,9 +10,9 @@ class InvalidInputError(ValueError):
     def __init__(self, message):
         super().__init__(message)
 
-def get_field(prompt, nullable=False):
+def get_field(prompt, whitespace=False, nullable=False):
     _input = input(f'{prompt}: ').strip()
-    if any(c.isspace() for c in _input.strip()):
+    if not whitespace and any(c.isspace() for c in _input.strip()):
         raise InvalidInputError('Invalid entry, must not contain whitespace.')
     
     if len(_input) == 0:
@@ -376,7 +376,7 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             print(f'Unable to disconnect from {username}.')
 
     def post_job(self):
-        data = {get_field(f'Enter the {field}') for field in ['title', 'description', 'employer', 'location', 'salary']}
+        data = {field: get_field(f'Enter the {field}', whitespace=True) for field in ['title', 'description', 'employer', 'location', 'salary']}
         try:
             assert data['salary'][0] == '$'
             data['salary'] = int(data['salary'][1:])
@@ -389,7 +389,7 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             print('Job posting created successfully.')
         else:
             if response.json() == { 'error': 'Limit of five job postings has been reached' }:
-                print('Limit of five job postings has been reached')
+                print('Limit of five job postings has been reached.')
             else:
                 print('Error creating job posting.')
 
