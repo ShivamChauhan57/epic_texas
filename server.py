@@ -6,7 +6,7 @@ from pathlib import Path
 import jwt
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
-from models import Base
+from models import Base, Users
 
 from request_handlers import handlers, authenticated_handlers
 
@@ -31,11 +31,14 @@ def authenticate():
         print(e)
         return 'Unauthorized', 401
 
+    if g.session.query(Users).filter(Users.id == g.user_id).one_or_none() is None:
+        return 'Unauthorized', 401
+
 app = Flask(__name__)
 
 app.before_request_funcs = {
     'handlers': [ create_session ],
-    'authenticated_handlers': [ authenticate, create_session ]
+    'authenticated_handlers': [ create_session, authenticate ]
 }
 
 app.after_request_funcs = {

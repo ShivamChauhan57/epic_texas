@@ -45,12 +45,14 @@ class Menu:
             print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
 
             try:
-                action = actions[int((input('Enter choice (enter the index): ')).strip()) - 1]
+                action = actions[int(input('Enter choice (enter the index): ').strip()) - 1]
+            except (ValueError, IndexError):
+                print('Invalid response, try again.')
+
+            try:
                 action()
             except (InvalidInputError, StatusCodeError) as e:
                 print(e)
-            except (ValueError, IndexError):
-                print('Invalid response, try again.')
 
             print()
 
@@ -77,7 +79,7 @@ class Menu:
                 print('You have pending connection requests to accept or deny.')
 
             options = [
-                ('See profile', self.see_profile),
+                ('View/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
                 ('Lookup users', self.lookup_users),
                 ('Send connection requests', self.send_connection_request),
@@ -88,6 +90,12 @@ class Menu:
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Log out', self.logout)
+            ]
+        elif self.mode == 'profile':
+            options = [
+                ('View/edit profile', self.see_profile),
+                ('View/edit job history', self.see_job_history),
+                ('Go back', lambda: self.change_mode('main'))
             ]
         elif self.mode == 'job search/internship':
             options = [
@@ -249,10 +257,16 @@ class Menu:
             print('Username not available!')
             return
 
-        data['firstname'] = get_field(f'Please enter your first name')
-        data['lastname'] = get_field(f'Please enter your last name')
-        data['university'] = get_field(f'Please enter your university', whitespace=True)
-        data['major'] = get_field(f'Please enter your subject major', whitespace=True)
+        data['firstname'] = get_field('Enter your first name')
+        data['lastname'] = get_field('Enter your last name')
+
+        # These two fields must be in the profile because one must
+        # be able to look users up by these
+        data['university'] = get_field('Enter your university', whitespace=True)
+        data['university'] = ' '.join(word[0].upper() + word[1:].lower() for word in data['university'].split(' '))
+
+        data['major'] = get_field('Enter your subject major', whitespace=True)
+        data['major'] = ' '.join(word[0].upper() + word[1:].lower() for word in data['major'].split(' '))
 
         password = getpass('Enter your password: ').strip()
         if not validate_password(password):
@@ -276,7 +290,11 @@ class Menu:
 
     def see_profile(self):
         response = self.get('/profile', error_msg='Error retrieving profile info.', authenticate=True)
-        print('\n'.join(f'{field}: {response[field]}' for field in ['username', 'firsname', 'lastname']))
+        print('\n'.join(f'{field}: {response[field]}'
+            for field in ['username', 'firsname', 'lastname', 'bio', 'university', 'major', 'years-attended']))
+
+    def see_job_history(self):
+        pass
 
     def discover_users(self):
         users = self.get('/list-users', error_msg='Error retrieving user list.')

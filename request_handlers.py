@@ -1,11 +1,12 @@
 from flask import request, g, jsonify, Blueprint
-import datetime
+from datetime import datetime
 from pathlib import Path
 import time
 import jwt
 import sqlite3
 from sqlalchemy.orm import joinedload
-from models import Users, Connections, JobPostings, UserPreferences
+from sqlalchemy.exc import IntegrityError
+from models import Users, Profiles, Experience, Connections, JobPostings, UserPreferences
 
 handlers = Blueprint('handlers', __name__)
 authenticated_handlers = Blueprint('authenticated_handlers', __name__)
@@ -27,9 +28,14 @@ def lookup_user():
     fields = list(data.keys())
 
     labels = ['username', 'firstname', 'lastname']
-    query = g.session.query(*[getattr(Users, label) for label in labels])
+    query = g.session.query(*[getattr(Users, label) for label in labels]) \
+        .join(Profiles, Users.id == Profiles.user_id)
     for field in fields:
-        query = query.filter(getattr(Users, field) == data[field])
+        if field in ['firstname', 'lastname']:
+            query = query.filter(getattr(Users, field) == data[field])
+        elif field in ['university', 'major']:
+            query = query.filter(getattr(Profiles, field) == data[field])
+
     matches = query.all()
 
     return jsonify({'matches': [{label: user._asdict()[label] for label in labels} for user in matches]}), 200
@@ -42,7 +48,8 @@ def log_in():
         return jsonify({'error': 'Missing data, both username and password are required.'}), 400
 
     user = g.session.query(Users.id, Users.username, Users.passwordHash) \
-        .filter(Users.username == username).one_or_none()
+        .filter(Users.username == username) \
+        .one_or_none()
 
     if user is None:
         return jsonify({'error': 'Invalid username or password.'}), 400
@@ -67,23 +74,28 @@ def add_user():
     session = g.session
     data = request.get_json()
 
-    fields = ['username', 'firstname', 'lastname', 'university', 'major', 'passwordHash']
+    fields = ['username', 'firstname', 'lastname', 'passwordHash', 'university', 'major']
     if set(data.keys()) != set(fields):
         return jsonify({'error': 'Invalid fields.'}), 400
 
     if session.query(Users).count() >= 10:
         return jsonify({'error': 'Limit of ten users has been reached'}), 400
 
-    session.add(Users(**{field: data[field] for field in fields}))
+    for field_to_capitalize in fields[-2:]:
+        if data[field_to_capitalize].strip() == '':
+            return jsonify({'error': f'Invalid {field_to_capitalize}.'}), 400
+        data[field_to_capitalize] = ' '.join(word[0].upper() + word[1:]
+            for word in data[field_to_capitalize].strip().split(' '))
 
+    new_user = Users(**{field: data[field] for field in fields[:-2]})
+    session.add(new_user)
     try:
-        session.commit()
-        user_id = new_user.id
+        session.flush()     # this synchronizes the session with the above change without committing it
     except IntegrityError:
-        session.rollback()
         return jsonify({'error': 'The username you chose has already been taken.'}), 400
 
-    session.add(UserPreferences(user_id=user_id, email_notifications_enabled=True,
+    session.add(Profiles(user_id=new_user.id, **{field: data[field] for field in fields[-2:]}))
+    session.add(UserPreferences(user_id=new_user.id, email_notifications_enabled=True,
         sms_notifications_enabled=True, targeted_advertising_enabled=True, language='english'))
     session.commit()
 
@@ -91,14 +103,142 @@ def add_user():
 
 @authenticated_handlers.route('/profile', methods=['GET'])
 def get_profile():
-    labels = ['username', 'firstname', 'lastname']
-    profile = g.session.query(*[getattr(Users, label) for label in labels]) \
-        .filter(Users.id == g.user_id).one_or_none()
-
-    if profile is None:
-        return jsonify({'error': 'User not found'}), 404
+    labels = ['username', 'firstname', 'lastname', 'bio', 'university', 'major', 'years_attended']
+    profile = g.session.query(*[getattr(Users if i < 3 else Profiles, label) for i, label in enumerate(labels)]) \
+        .join(Profiles, Users.id == Profiles.user_id) \
+        .filter(Users.id == g.user_id) \
+        .one_or_none()
 
     return jsonify({label: profile._asdict()[label] for label in labels}), 200
+
+@authenticated_handlers.route('/friend-profile', methods=['POST'])
+def get_friend_profile():
+    friend_id = request.get_json().get('id')
+    if friend_id is None:
+        return jsonify({'error': 'FORMAT: { "id": friend_id }'}), 400
+
+    labels = ['bio', 'university', 'major', 'years_attended']
+    profile = g.session.query(*[getattr(Profiles, label) for label in labels]) \
+        .join(Connections, ((Profiles.user_id == Connections.user_id) & (Connections.connection_id == g.user_id)) |
+            ((Profiles.user_id == Connections.connection_id) & (Connections.user_id == g.user_id))) \
+        .filter(Profiles.user_id == friend_id) \
+        .one_or_none()
+
+    if friend_id is None:
+        return jsonify({'error': f'You are not connected to the user with id {friend_id}.'}), 400
+
+    return jsonify({label: profile._asdict()[label] for label in labels}), 200
+
+@authenticated_handlers.route('/edit-profile', methods=['POST'])
+def edit_profile():
+    data = request.get_json()
+
+    if len(data) != 1:
+        return jsonify({'error': 'FORMAT: { field: value }'}), 400
+    field, value = list(data.items())[0]
+    match field:
+        case 'bio':
+            pass
+        case 'university' | 'major':
+            if value.strip() == '':
+                return jsonify({'error': f'Invalid {field}.'}), 400
+            value = ' '.join(word[0].upper() + word[1:] for word in value.strip().split(' '))
+        case 'years_attended':
+            if not isinstance(data[field], int):
+                return jsonify({'error': f'Invalid years_attended: {value}'}), 400
+        case _:
+            return jsonify({'error': f'Invalid field: {field}'}), 400
+
+    profile = g.session.query(Profiles) \
+        .filter(Profiles.user_id == g.user_id) \
+        .one_or_none()
+
+    setattr(profile, field, value)
+    g.session.commit()
+
+    return jsonify({'message': 'Successfully editted profile.'}), 200
+
+@authenticated_handlers.route('/job-history', methods=['GET'])
+def get_job_history():
+    labels = ['id', 'title', 'employer', 'start_date', 'end_date', 'location', 'description']
+    job_history = g.session.query(*[getattr(Experience, label) for label in labels]) \
+        .filter(Experience.user_id == g.user_id) \
+        .all()
+
+    return jsonify([{label: job._asdict()[label] for label in labels} for job in job_history]), 200
+
+@authenticated_handlers.route('/add-job-history', methods=['POST'])
+def add_job_history():
+    session = g.session
+    data = request.get_json()
+
+    if session.query(Experience).filter(Experience.user_id == g.user_id).count() >= 3:
+        return jsonify({'error': 'Limit of three jobs has been reached' }), 400
+
+    labels = ['title', 'employer', 'start_date', 'end_date', 'location', 'description']     # the first four fields are required
+    invalid_field_specified = any(field not in labels for field in data.keys())
+    required_fields_specified = all(field in data.keys() for field in labels[:4])
+    if invalid_field_specified or not required_fields_specified:
+        return jsonify({'error': 'Invalid fields.'}), 400
+
+    for date_label in ['start_date', 'end_date']:
+        try:
+            date[date_label] = datetime.strptime(data[date_label], '%m/%d/%Y').date()
+        except ValueError:
+            return jsonify({'error': f'Invalid {date_label}: {data[date_label]}'}), 400
+
+    session.add(Experience(user_id=g.user_id, **data))
+    session.commit()
+
+    return jsonify({'message': 'Successfully added job history'}), 200
+
+@authenticated_handlers.route('/edit-job-history', methods=['POST'])
+def edit_job_history():
+    data = request.get_json()
+
+    if len(data) != 2 or 'id' not in data:
+        return jsonify({'error': 'FORMAT: { "id": id, field: value }'}), 400
+    job_id = data['id']
+    field = [field for field in data.keys() if field != 'id'][0]
+    if field not in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']:
+        return jsonify({'error': f'Invalid field: {field}'}), 400
+    if field in ['start_date', 'end_date']:
+        try:
+            date[field] = datetime.strptime(data[field], '%m/%d/%Y').date()
+        except ValueError:
+            return jsonify({'error': f'Invalid {field}: {data[field]}'}), 400
+
+    job = g.session.query(Experience) \
+        .filter(Experience.user_id == g.user_id & Experience.id == job_id) \
+        .one_or_none()
+
+    if job is None:
+        return jsonify({'error': f'Invalid job id.'}), 400
+
+    setattr(job, field, data[field])
+    g.session.commit()
+
+    return jsonify({'message': 'Successfully editted job history'}), 200
+
+@authenticated_handlers.route('/remove-job-history', methods=['POST'])
+def remove_job_history():
+    session = g.session
+    data = request.get_json()
+
+    if len(data) != 1 or 'id' not in data:
+        return jsonify({'error': 'FORMAT: { "id": id }'}), 400
+
+    job = session.query(Experience) \
+        .filter(Experience.user_id == g.user_id & Experience.id == data['id']) \
+        .one_or_none()
+
+    if job is None:
+        return jsonify({'error': f'Invalid job id.'}), 400
+
+    session.delete(job)
+    session.commit()
+
+    return jsonify({'message': 'Successfully removed job.'}), 200
 
 @authenticated_handlers.route('/make-connection-request', methods=['POST'])
 def make_connection_request():
@@ -112,7 +252,9 @@ def make_connection_request():
     if g.username == target_username:
         return jsonify({'error': 'You cannot connect with yourself.'}), 400
 
-    target = session.query(Users.id).filter(Users.username == target_username).one_or_none()
+    target = session.query(Users.id) \
+        .filter(Users.username == target_username) \
+        .one_or_none()
     if target is None:
         return jsonify({'error': 'User not found.'}), 404
 
@@ -181,15 +323,15 @@ def accept_requests():
 
 @authenticated_handlers.route('/connections', methods=['GET'])
 def connections():
-    connections = \
-        g.session.query(Users.username, Users.firstname, Users.lastname) \
+    labels = ['id', 'username', 'firstname', 'lastname']
+    connections = g.session.query(*[getattr(Users, label) for label in labels]) \
         .join(Connections, ((Users.id == Connections.user_id) & (Connections.connection_id == g.user_id)) |
             ((Users.id == Connections.connection_id) & (Connections.user_id == g.user_id))) \
         .filter(Connections.request_status == 'accepted') \
         .all()
 
     return jsonify([{label:
-        connection._asdict()[label] for label in ['username', 'firstname', 'lastname']}
+        connection._asdict()[label] for label in labels}
         for connection in connections
     ]), 200
 
@@ -251,7 +393,8 @@ def get_user_preferences():
         'language'
     ]
     preferences = g.session.query(*[getattr(UserPreferences, label) for label in labels]) \
-        .filter(UserPreferences.user_id == g.user_id).one_or_none()
+        .filter(UserPreferences.user_id == g.user_id) \
+        .one_or_none()
 
     if preferences is None:
         return jsonify({'error': 'Preferences not found'}), 404
@@ -272,8 +415,13 @@ def set_user_preferences():
         'language']:
         return jsonify({'error': f'Invalid field: {field}'})
 
+    if (field == 'language' and value not in ['english', 'spanish']) or \
+        not isinstance(value, bool):
+        return jsonify({'error': f'Invalid {field}.'}), 400
+
     preferences = session.query(UserPreferences) \
-        .filter(UserPreferences.user_id == g.user_id).one_or_none()
+        .filter(UserPreferences.user_id == g.user_id) \
+        .one_or_none()
     setattr(preferences, field, value)
     session.commit()
 
