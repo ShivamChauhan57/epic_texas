@@ -56,6 +56,8 @@ class Menu:
 
             print()
 
+    # self.options returns a list of label-action pairs
+    # it doesn't return a dictionary mapping label to action because order of the entries is going to matter
     def options(self):
         options = None
         if self.mode == 'log-in':
@@ -79,7 +81,7 @@ class Menu:
                 print('You have pending connection requests to accept or deny.')
 
             options = [
-                ('View/edit profile', lambda: self.change_mode('profile')),
+                ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
                 ('Lookup users', self.lookup_users),
                 ('Send connection requests', self.send_connection_request),
@@ -241,37 +243,24 @@ class Menu:
                 return False    # signing up will be unsuccessful regardless
 
         def validate_password(password):
-            def special(c):
-                digit = 0 <= ord(c) - ord('0') < 10
-                letter = 0 <= ord(c.lower()) - ord('a') < 26
-                return not (digit or letter or c.isspace())
-
             contains_digit = any(chr(ord('0') + i) in password for i in range(10))
             contains_capital = any(chr(ord('A') + i) in password for i in range(ord('Z') - ord('A') + 1))
-            contains_special = any(special(c) for c in password)
+            contains_special = any(c.isdigit() or 0 <= ord(c.lower()) - ord('a') < 26 or c.isspace() for c in password)
 
             return 8 <= len(password) <= 12 and contains_digit and contains_capital and contains_special
 
         data = {'username': get_field('Please enter your username')}
         if username_exists(data['username']):
-            print('Username not available!')
-            return
+            raise InvalidInputError('Username not available!')
 
         data['firstname'] = get_field('Enter your first name')
         data['lastname'] = get_field('Enter your last name')
-
-        # These two fields must be in the profile because one must
-        # be able to look users up by these
         data['university'] = get_field('Enter your university', whitespace=True)
-        data['university'] = ' '.join(word[0].upper() + word[1:].lower() for word in data['university'].split(' '))
-
         data['major'] = get_field('Enter your subject major', whitespace=True)
-        data['major'] = ' '.join(word[0].upper() + word[1:].lower() for word in data['major'].split(' '))
 
         password = getpass('Enter your password: ').strip()
         if not validate_password(password):
-            print('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
-            return
+            raise InvalidInputError('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
 
         if getpass('Confirm your password: ').strip() != password:
             print('Passwords don\'t match!')
@@ -290,8 +279,47 @@ class Menu:
 
     def see_profile(self):
         response = self.get('/profile', error_msg='Error retrieving profile info.', authenticate=True)
-        print('\n'.join(f'{field}: {response[field]}'
-            for field in ['username', 'firsname', 'lastname', 'bio', 'university', 'major', 'years-attended']))
+        labels = [
+            ('username', 'username'),
+            ('firstname', 'first name'),
+            ('lastname', 'last name'),
+            ('bio', 'bio'),
+            ('university', 'university'),
+            ('major', 'major'),
+            ('years_attended', 'years attended')
+        ]   # this is not a dictionary because order matters here
+        for i, (field, label) in enumerate(labels):
+            def capitalize(s):
+                return s[0].upper() + s[1:]
+
+            if response[field] is None:
+                print(f'{i + 1}) {capitalize(label)}: Not yet set.')
+            else:
+                print(f'{i + 1}) {capitalize(label)}: {response[field]}')
+
+        field_to_edit = input('Would you like to make any changes? If so, enter the index of the field to edit. Otherwise, simply press enter: ')
+        if field_to_edit.strip() == '':
+            return
+
+        try:
+            field_to_edit = labels[int(field_to_edit) - 1][0]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if field_to_edit in next(zip(*labels))[:3]:
+            raise InvalidInputError('This field is not editable.')
+
+        new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
+        if field_to_edit == 'years_attended':
+            try:
+                new_value = int(new_value)
+            except ValueError:
+                raise InvalidInputError(f'Invalid years_attended: {new_value}')
+
+        self.post('/edit-profile', {field_to_edit: new_value},
+            error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
+
+        print(f'Successfully updated {field_to_edit}\'s value.')
 
     def see_job_history(self):
         pass
@@ -349,7 +377,9 @@ class Menu:
             return
 
         print('Incoming connection requests:')
-        print('\n'.join(' '.join(user.values()) for user in connection_requests))
+        print('\n'.join(
+                ' '.join(user[field] for field in ['username', 'firstname', 'lastname']
+            ) for user in connection_requests))
 
         users_to_accept = input('Enter the usernames of the users to accept (separated by a space). Leave empty to accept no requests: ').strip().split(' ')
         users_to_deny = input('Enter the usernames of the users to deny (separated by a space). Leave empty to deny no requests: ').strip().split(' ')
@@ -370,10 +400,40 @@ class Menu:
 
     def view_connections(self):
         connections = self.get('/connections', error_msg='Unable to view current connections.', authenticate=True)
-        if len(connections) > 0:
-            print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in connections))
-        else:
+        if len(connections) == 0:
             print('You have no connections.')
+            return
+
+        for i, friend in enumerate(connections):
+            print(f'{i + 1}) ' + ' '.join(friend[field] for field in ['username', 'firstname', 'lastname']))
+
+        friend = input('To see a friend\'s profile, enter the his/her index. To skip this, simply press enter: ')
+        if friend.strip() == '':
+            return
+
+        try:
+            friend = connections[int(friend) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        response = self.post('/friend-profile', { 'id': friend['id'] },
+            error_msg=f'Unable to view {friend["username"]}\'s profile.', authenticate=True)
+
+        for field, label in [
+                ('username', 'Username'),
+                ('firstname', 'First name'),
+                ('lastname', 'Last name')
+            ]:     # this is not a dictionary because order matters here
+            print(f'{label}: {friend[field]}')
+
+        for field, label in [
+                ('bio', 'Bio'),
+                ('university', 'University'),
+                ('major', 'Major'),
+                ('years_attended', 'Years attended')
+            ]:
+            if response[field] is not None:
+                print(f'{label}: {response[field]}')
 
     def disconnect(self):
         username = get_field('Enter the username of the user to disconnect')
@@ -386,8 +446,7 @@ class Menu:
             assert data['salary'][0] == '$'
             data['salary'] = int(data['salary'][1:])
         except (AssertionError, ValueError):
-            print('Invalid salary, must be a number which begins with $')
-            return
+            raise InvalidInputError('Invalid salary, must be a number which begins with $')
 
         response = self.post('/post-job', data, authenticate=True)
         if response.status_code == 200:
