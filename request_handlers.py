@@ -183,7 +183,7 @@ def add_job_history():
 
     for date_label in ['start_date', 'end_date']:
         try:
-            date[date_label] = datetime.strptime(data[date_label], '%m/%d/%Y').date()
+            data[date_label] = datetime.strptime(data[date_label], '%m/%d/%Y').date()
         except ValueError:
             return jsonify({'error': f'Invalid {date_label}: {data[date_label]}'}), 400
 
@@ -204,12 +204,12 @@ def edit_job_history():
         return jsonify({'error': f'Invalid field: {field}'}), 400
     if field in ['start_date', 'end_date']:
         try:
-            date[field] = datetime.strptime(data[field], '%m/%d/%Y').date()
+            data[field] = datetime.strptime(data[field], '%m/%d/%Y').date()
         except ValueError:
             return jsonify({'error': f'Invalid {field}: {data[field]}'}), 400
 
     job = g.session.query(Experience) \
-        .filter(Experience.user_id == g.user_id & Experience.id == job_id) \
+        .filter((Experience.user_id == g.user_id) & (Experience.id == job_id)) \
         .one_or_none()
 
     if job is None:
@@ -229,7 +229,7 @@ def remove_job_history():
         return jsonify({'error': 'FORMAT: { "id": id }'}), 400
 
     job = session.query(Experience) \
-        .filter(Experience.user_id == g.user_id & Experience.id == data['id']) \
+        .filter((Experience.user_id == g.user_id) & (Experience.id == data['id'])) \
         .one_or_none()
 
     if job is None:
@@ -356,7 +356,7 @@ def disconnect():
     session.commit()
     return jsonify({'success': f'successfully disconnected from {username_to_disconnect}'}), 200
 
-@authenticated_handlers.route('/disconnect', methods=['POST'])
+@authenticated_handlers.route('/post-job', methods=['POST'])
 def post_job():
     session = g.session
     data = request.get_json()
@@ -368,7 +368,6 @@ def post_job():
     if session.query(JobPostings).count() >= 5:
         return jsonify({'error': 'Limit of five job postings has been reached' }), 400
 
-    user_id = user[0]
     session.add(JobPostings(**{field: data[field] for field in fields}, user_id=g.user_id))
     session.commit()
 
@@ -386,7 +385,7 @@ def get_job_postings():
 
 @authenticated_handlers.route('/user-preferences', methods=['GET'])
 def get_user_preferences():
-    label = [
+    labels = [
         'email_notifications_enabled',
         'sms_notifications_enabled',
         'targeted_advertising_enabled',

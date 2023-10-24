@@ -291,7 +291,6 @@ class Menu:
         for i, (field, label) in enumerate(labels):
             def capitalize(s):
                 return s[0].upper() + s[1:]
-
             if response[field] is None:
                 print(f'{i + 1}) {capitalize(label)}: Not yet set.')
             else:
@@ -322,7 +321,81 @@ class Menu:
         print(f'Successfully updated {field_to_edit}\'s value.')
 
     def see_job_history(self):
-        pass
+        response = self.get('/job-history', error_msg='Error retrieving job history.', authenticate=True)
+        if (len(response) == 0):
+            job_add = input('Would you like to add a job? If so, enter add. Otherwise, simply press enter: ')
+
+            if (job_add == ''):
+                return
+            
+            data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
+
+            response = self.post('/add-job-history', data, authenticate=True)
+            if response.status_code == 200:
+                print('Successfully added job to history.')
+            else:
+                if response.json() == { 'error': 'Limit of three jobs has been reached' }:
+                    print('Limit of three jobs has been reached.')
+                else:
+                    print('Error adding job.')
+        else:
+            labels = [
+                ('id', 'id'),
+                ('title', 'title'),
+                ('employer', 'employer'),
+                ('location', 'location'),
+                ('start_date', 'start date'),
+                ('end_date', 'end date'),
+                ('description', 'description')
+            ]
+            for job in response:
+                for i, (field, label) in enumerate(labels):
+                    def capitalize(s):
+                        return s[0].upper() + s[1]
+                    
+                    if job[field] is None:
+                        print(f'{i + 1}) {capitalize(label)}: Not yet set.')
+                    else:
+                        print(f'{i + 1}) {capitalize(label)}: {job[field]}')
+
+            modify_job_history = input('Would you like to make any changes? If so, enter add to add a new job, remove to remove a job, edit to edit a job, or press enter to exit: ')
+            if (modify_job_history == ''):
+                return
+            
+            if (modify_job_history == 'add'):
+                data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
+
+                response = self.post('/add-job-history', data, authenticate=True)
+                if response.status_code == 200:
+                    print('Successfully added job to history.')
+                else:
+                    if response.json() == { 'error': 'Limit of three jobs has been reached' }:
+                        print('Limit of three jobs has been reached.')
+                    else:
+                        print('Error adding job.')
+                return
+            
+            if (modify_job_history == 'remove'):
+                index = int(input("Enter the index of the job to remove: "))
+                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg=f'Failed to delete job.', authenticate=True)
+            
+            if (modify_job_history == 'edit'):
+                field_to_edit = input('Enter the index of the field to edit: ')
+            
+                try:
+                    field_to_edit = labels[int(field_to_edit) - 1][0]
+                except (ValueError, IndexError):
+                    raise InvalidInputError('Invalid response, try again.')
+                
+                if field_to_edit in next(zip(*labels))[:3]:
+                    raise InvalidInputError('This field is not editable.')
+                
+                new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
+                    
+                self.post('/edit-job-history', {'id': job['id'], field_to_edit: new_value},
+                    error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
+
+                print(f'Successfully updated {field_to_edit}\'s value.')
 
     def discover_users(self):
         users = self.get('/list-users', error_msg='Error retrieving user list.')
