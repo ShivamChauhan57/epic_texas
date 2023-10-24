@@ -6,13 +6,17 @@ import json
 from pathlib import Path
 import os
 
-class InvalidInputError(ValueError):
+class InvalidInputError(Exception):
     def __init__(self, message):
         super().__init__(message)
 
-def get_field(prompt, nullable=False):
+class StatusCodeError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+
+def get_field(prompt, whitespace=False, nullable=False):
     _input = input(f'{prompt}: ').strip()
-    if any(c.isspace() for c in _input.strip()):
+    if not whitespace and any(c.isspace() for c in _input.strip()):
         raise InvalidInputError('Invalid entry, must not contain whitespace.')
     
     if len(_input) == 0:
@@ -41,15 +45,19 @@ class Menu:
             print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
 
             try:
-                action = actions[int((input('Enter choice (enter the index): ')).strip()) - 1]
-                action()
-            except InvalidInputError as e:
-                print(e)
+                action = actions[int(input('Enter choice (enter the index): ').strip()) - 1]
             except (ValueError, IndexError):
                 print('Invalid response, try again.')
 
+            try:
+                action()
+            except (InvalidInputError, StatusCodeError) as e:
+                print(e)
+
             print()
 
+    # self.options returns a list of label-action pairs
+    # it doesn't return a dictionary mapping label to action because order of the entries is going to matter
     def options(self):
         options = None
         if self.mode == 'log-in':
@@ -68,11 +76,12 @@ class Menu:
                 self.change_mode('log-in')
                 return self.options()
 
-            if len(self.view_requests()) > 0:
+            response = self.get(f'/pending-requests', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
                 print('You have pending connection requests to accept or deny.')
 
             options = [
-                ('See profile', self.see_profile),
+                ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
                 ('Lookup users', self.lookup_users),
                 ('Send connection requests', self.send_connection_request),
@@ -83,6 +92,12 @@ class Menu:
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Log out', self.logout)
+            ]
+        elif self.mode == 'profile':
+            options = [
+                ('View/edit profile', self.see_profile),
+                ('View/edit job history', self.see_job_history),
+                ('Go back', lambda: self.change_mode('main'))
             ]
         elif self.mode == 'job search/internship':
             options = [
@@ -167,23 +182,54 @@ class Menu:
 
     def under_construction(self):
         print('Under construction')
-        
+
+    def get(self, path, error_msg=None, authenticate=False):
+        assert path.startswith('/'), f'Invalid path: {path}.'
+
+        headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
+        response = requests.get(f'{self.url}{path}', headers=headers)
+        if error_msg is None:
+            return response
+
+        if authenticate and response.status_code == 401:
+            if error_msg.endswith('.'):
+                error_msg = error_msg[:-1]
+            error_msg += ': permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.'
+
+        if response.status_code != 200:
+            raise StatusCodeError(error_msg)
+
+        return response.json()
+
+    def post(self, path, data, error_msg=None, authenticate=False):
+        assert path.startswith('/'), f'Invalid path: {path}.'
+
+        headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
+        headers['Content-Type'] = 'application/json'
+        response = requests.post(f'{self.url}{path}', data=json.dumps(data), headers=headers)
+        if error_msg is None:
+            return response
+
+        if authenticate and response.status_code == 401:
+            if error_msg.endswith('.'):
+                error_msg = error_msg[:-1]
+            error_msg += ': permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.'
+
+        if response.status_code != 200:
+            raise StatusCodeError(error_msg)
+
+        return response.json()
+
     def login(self):
         username = get_field('Please enter your username')
         passwordHash = hashlib.sha256(getpass('Enter your password: ').strip().encode()).hexdigest()
 
-        data = {
+        self.access_token = self.post('/login', {
             'username': username,
             'passwordHash': passwordHash
-        }
-
-        response = requests.post(f'{self.url}/login', data=json.dumps(data), headers={ 'Content-Type': 'application/json' })
-        if response.status_code == 200:
-            self.access_token = response.json()['token']
-            print('Login successful.')
-            self.change_mode('main')
-        else:
-            print('Login unsuccessful.')
+        }, error_msg='Login unsuccessful.')['token']
+        print('Login successful.')
+        self.change_mode('main')
 
     def logout(self):
         self.access_token = None
@@ -192,104 +238,196 @@ class Menu:
     def signup(self):
         def username_exists(username):
             try:
-                return any(username == user['username'] for user in requests.get(f'{self.url}/list-users').json())
+                return any(username == user['username'] for user in self.get('/list-users').json())
             except:
                 return False    # signing up will be unsuccessful regardless
 
         def validate_password(password):
-            def special(c):
-                digit = 0 <= ord(c) - ord('0') < 10
-                letter = 0 <= ord(c.lower()) - ord('a') < 26
-                return not (digit or letter or c.isspace())
-
             contains_digit = any(chr(ord('0') + i) in password for i in range(10))
             contains_capital = any(chr(ord('A') + i) in password for i in range(ord('Z') - ord('A') + 1))
-            contains_special = any(special(c) for c in password)
+            contains_special = any(c.isdigit() or 0 <= ord(c.lower()) - ord('a') < 26 or c.isspace() for c in password)
 
             return 8 <= len(password) <= 12 and contains_digit and contains_capital and contains_special
 
-        username = get_field('Please enter your username')
-        if username_exists(username):
-            print('Username not available!')
-            return
+        data = {'username': get_field('Please enter your username')}
+        if username_exists(data['username']):
+            raise InvalidInputError('Username not available!')
 
-        data = { field: get_field(f'Please enter your {field}') for field in ['firstname', 'lastname', 'university', 'major'] }
+        data['firstname'] = get_field('Enter your first name')
+        data['lastname'] = get_field('Enter your last name')
+        data['university'] = get_field('Enter your university', whitespace=True)
+        data['major'] = get_field('Enter your subject major', whitespace=True)
 
         password = getpass('Enter your password: ').strip()
         if not validate_password(password):
-            print('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
-            return
+            raise InvalidInputError('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
 
         if getpass('Confirm your password: ').strip() != password:
             print('Passwords don\'t match!')
             return
 
-        data = {
-            'username': username,
-            **data,
-            'passwordHash': hashlib.sha256(password.encode()).hexdigest()
-        }
+        data['passwordHash'] = hashlib.sha256(password.encode()).hexdigest()
 
-        response = requests.post(f'{self.url}/add-user', data=json.dumps(data), headers={ 'Content-Type': 'application/json' })
+        response = self.post('/add-user', data)
         if response.status_code == 200:
             print('You have successfully signed up! Please log in now.')
         else:
             if response.json() == { 'error': 'Limit of ten users has been reached' }:
                 print('All permitted accounts have been created, please come back later.')
             else:
-                print(response.json())
                 print('Sign up unsuccessful. Please try again.')
 
     def see_profile(self):
-        response = requests.get(f'{self.url}/profile', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            username, firstname, lastname = tuple(response.json().values())
-            print(f'Username: {username}')
-            print(f'First name: {firstname}')
-            print(f'Last name: {lastname}')
-        elif response.status_code == 401:
-            print('Error retrieving profile info: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
+        response = self.get('/profile', error_msg='Error retrieving profile info.', authenticate=True)
+        labels = [
+            ('username', 'username'),
+            ('firstname', 'first name'),
+            ('lastname', 'last name'),
+            ('bio', 'bio'),
+            ('university', 'university'),
+            ('major', 'major'),
+            ('years_attended', 'years attended')
+        ]   # this is not a dictionary because order matters here
+        for i, (field, label) in enumerate(labels):
+            def capitalize(s):
+                return s[0].upper() + s[1:]
+            
+            if response[field] is None:
+                print(f'{i + 1}) {capitalize(label)}: Not yet set.')
+            else:
+                print(f'{i + 1}) {capitalize(label)}: {response[field]}')
+
+        field_to_edit = input('Would you like to make any changes? If so, enter the index of the field to edit. Otherwise, simply press enter: ')
+        if field_to_edit.strip() == '':
+            return
+
+        try:
+            field_to_edit = labels[int(field_to_edit) - 1][0]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if field_to_edit in next(zip(*labels))[:3]:
+            raise InvalidInputError('This field is not editable.')
+
+        new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
+        if field_to_edit == 'years_attended':
+            try:
+                new_value = int(new_value)
+            except ValueError:
+                raise InvalidInputError(f'Invalid years_attended: {new_value}')
+
+        self.post('/edit-profile', {field_to_edit: new_value},
+            error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
+
+        print(f'Successfully updated {field_to_edit}\'s value.')
+
+    def see_job_history(self):
+        response = self.get('/job-history', error_msg='Error retrieving job history.', authenticate=True)
+        if len(response) == 0:
+            job_add = input('Would you like to add a job? If so, enter add. Otherwise, simply press enter: ')
+
+            if job_add == '':
+                return
+            
+            data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
+
+            response = self.post('/add-job-history', data, authenticate=True)
+            if response.status_code == 200:
+                print('Successfully added job to history.')
+            else:
+                if response.json() == { 'error': 'Limit of three jobs has been reached' }:
+                    print('Limit of three jobs has been reached.')
+                else:
+                    print('Error adding job.')
         else:
-            print('Error retrieving profile info.')
+            labels = [
+                ('id', 'id'),
+                ('title', 'title'),
+                ('employer', 'employer'),
+                ('location', 'location'),
+                ('start_date', 'start date'),
+                ('end_date', 'end date'),
+                ('description', 'description')
+            ]
+            for job in response:
+                for i, (field, label) in enumerate(labels):
+                    def capitalize(s):
+                        return s[0].upper() + s[1]
+                    
+                    if job[field] is None:
+                        print(f'{i + 1}) {capitalize(label)}: Not yet set.')
+                    else:
+                        print(f'{i + 1}) {capitalize(label)}: {job[field]}')
+
+            modify_job_history = input('Would you like to make any changes? If so, enter add to add a new job, remove to remove a job, edit to edit a job, or press enter to exit: ')
+            
+            if modify_job_history == 'add':
+                data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
+
+                response = self.post('/add-job-history', data, authenticate=True)
+                if response.status_code == 200:
+                    print('Successfully added job to history.')
+                else:
+                    if response.json() == { 'error': 'Limit of three jobs has been reached' }:
+                        print('Limit of three jobs has been reached.')
+                    else:
+                        print('Error adding job.')
+                return
+            
+            elif modify_job_history == 'remove':
+                index = int(input("Enter the index of the job to remove: "))
+                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg=f'Failed to delete job.', authenticate=True)
+            
+            elif modify_job_history == 'edit':
+                field_to_edit = input('Enter the index of the field to edit: ')
+            
+                try:
+                    field_to_edit = labels[int(field_to_edit) - 1][0]
+                except (ValueError, IndexError):
+                    raise InvalidInputError('Invalid response, try again.')
+                
+                if field_to_edit in next(zip(*labels))[:3]:
+                    raise InvalidInputError('This field is not editable.')
+                
+                new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
+                    
+                self.post('/edit-job-history', {'id': job['id'], field_to_edit: new_value},
+                    error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
+
+                print(f'Successfully updated {field_to_edit}\'s value.')
 
     def discover_users(self):
-        response = requests.get(f'{self.url}/list-users')
-        if response.status_code != 200:
-            print('Error retrieving user list')
-
-        if len(users := response.json()):
+        users = self.get('/list-users', error_msg='Error retrieving user list.')
+        if len(users):
             for user in users:
                 print(' '.join(user.values()))
         else:
             print('No users yet.')
 
     def lookup_users(self):
-        fields = { field: get_field(f'Enter the user\'s {field} (leave empty and press enter to skip)', nullable=True)
-            for field in ['firstname', 'lastname', 'university', 'major'] }
+        fields = {
+            'firstname': get_field(f'Enter the user\'s first name (leave empty and press enter to skip)', nullable=True),
+            'lastname': get_field(f'Enter the user\'s last name (leave empty and press enter to skip)', nullable=True),
+            'university': get_field(f'Enter the user\'s university name (leave empty and press enter to skip)', whitespace=True, nullable=True),
+            'major': get_field(f'Enter the user\'s subject major (leave empty and press enter to skip)', whitespace=True, nullable=True)
+        }
         fields = {field: fields[field] for field in fields if fields[field]}
         if len(fields) == 0:
             raise InvalidInputError('You skipped all conditions!')
-            return
 
-        response = requests.post(f'{self.url}/lookup-user', data=json.dumps(fields))
-
-        if response.status_code == 200:
-            matches = response.json()['matches']
-            if len(matches) > 0:
-                print(f'Matches:')
-                print('\n'.join(' '.join(user.values()) for user in matches))
-            else:
-                print(f'Nobody matches these criteria.')
-                return
+        matches = self.post('/lookup-user', fields, error_msg='Unable to lookup whether user is part of the InCollege system.')['matches']
+        if len(matches) > 0:
+            print(f'Matches:')
+            print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in matches))
         else:
-            print('Unable to lookup whether user is part of the InCollege system')
+            print(f'Nobody matches these criteria.')
             return
 
         if not self.access_token:
             return
 
-        request_target = get_field('Would you like to connect to any of the matches? If so, enter their username. If not, simply press enter', nullable=True)
-        if request_target == None:
+        request_target = get_field('Would you like to connect to any one of the matches displayed above? If so, enter their username. If not, simply press enter', nullable=True)
+        if request_target is None:
             return
         if not any(user['username'] == request_target for user in matches):
             raise InvalidInputError(f'{request_target} isn\'t one of the matches.')
@@ -300,35 +438,20 @@ class Menu:
         if username == None:
             username = get_field('Enter the username of the person to connect with')
 
-        response = requests.post(f'{self.url}/make-connection-request', data=json.dumps({ 'username': username }),
-            headers={ 'Authorization': f'Bearer {self.access_token}' })
-
-        if response.status_code == 200:
-            print('Connection request successfully sent.')
-        elif response.status_code == 401:
-            print(f'Unable to send {username} a connection request: \
-permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print(f'Unable to send {username} a connection request')
-
-    def view_requests(self):
-        response = requests.get(f'{self.url}/pending-requests', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
+        self.post('/make-connection-request', { 'username': username },
+            error_msg=f'Unable to send {username} a connection request.', authenticate=True)
+        print('Connection request successfully sent.')
 
     def consider_requests(self):
-        connection_requests = self.view_requests()
-        if connection_requests == None:
-            print('Error retrieving connection requests.')
-            return
-        elif len(connection_requests) == 0:
+        connection_requests = self.get('/pending-requests', error_msg='You have no connection requests.', authenticate=True)
+        if len(connection_requests) == 0:
             print('You have no connection requests.')
             return
 
         print('Incoming connection requests:')
-        print('\n'.join(' '.join(user.values()) for user in connection_requests))
+        print('\n'.join(
+                ' '.join(user[field] for field in ['username', 'firstname', 'lastname']
+            ) for user in connection_requests))
 
         users_to_accept = input('Enter the usernames of the users to accept (separated by a space). Leave empty to accept no requests: ').strip().split(' ')
         users_to_deny = input('Enter the usernames of the users to deny (separated by a space). Leave empty to deny no requests: ').strip().split(' ')
@@ -338,68 +461,78 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             'users-to-deny': [{ 'username': username } for username in users_to_deny if username != '']
         }
 
-        response = requests.post(f'{self.url}/accept-requests', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            accepted, denied, ignored = tuple(response.json()[field] for field in ['accepted', 'denied', 'ignored'])
-            if len(accepted):
-                print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
-            if len(denied):
-                print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
-            if len(ignored):
+        response = self.post(f'/accept-requests', data, error_msg='Unable to consider requests.', authenticate=True)
+        accepted, denied, ignored = tuple(response[field] for field in ['accepted', 'denied', 'ignored'])
+        if len(accepted):
+            print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
+        if len(denied):
+            print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
+        if len(ignored):
                 print('\n'.join(f'You do not have a connection request from {user["username"]}.' for user in ignored))
-        elif response.status_code == 401:
-            print('Unable to consider requests: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print('Unable to consider requests.')
 
     def view_connections(self):
-        response = requests.get(f'{self.url}/connections', headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            connections = response.json()
-            if len(connections) > 0:
-                print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in connections))
-            else:
-                print('You have no connections.')
-        elif response.status_code == 401:
-            print('Unable to view current connections: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print('Unable to view current connections.')
+        connections = self.get('/connections', error_msg='Unable to view current connections.', authenticate=True)
+        if len(connections) == 0:
+            print('You have no connections.')
+            return
+
+        for i, friend in enumerate(connections):
+            print(f'{i + 1}) ' + ' '.join(friend[field] for field in ['username', 'firstname', 'lastname']))
+
+        friend = input('To see a friend\'s profile, enter the his/her index. To skip this, simply press enter: ')
+        if friend.strip() == '':
+            return
+
+        try:
+            friend = connections[int(friend) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        response = self.post('/friend-profile', { 'id': friend['id'] },
+            error_msg=f'Unable to view {friend["username"]}\'s profile.', authenticate=True)
+
+        for field, label in [
+                ('username', 'Username'),
+                ('firstname', 'First name'),
+                ('lastname', 'Last name')
+            ]:     # this is not a dictionary because order matters here
+            print(f'{label}: {friend[field]}')
+
+        for field, label in [
+                ('bio', 'Bio'),
+                ('university', 'University'),
+                ('major', 'Major'),
+                ('years_attended', 'Years attended')
+            ]:
+            if response[field] is not None:
+                print(f'{label}: {response[field]}')
 
     def disconnect(self):
         username = get_field('Enter the username of the user to disconnect')
-        response = requests.post(f'{self.url}/disconnect', data=json.dumps({ 'username': username }), headers={ 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            print(f'Successfully disconnected from {username}.')
-        elif response.status_code == 401:
-            print(f'Unable to disconnect from {username}: permission denied. If you haven\'t logged in yet, please do so. If you have, consider doing so again.')
-        else:
-            print(f'Unable to disconnect from {username}.')
+        self.post('/disconnect', { 'username': username }, error_msg=f'Unable to disconnect from {username}.', authenticate=True)
+        print(f'Successfully disconnected from {username}.')
 
     def post_job(self):
-        data = {get_field(f'Enter the {field}') for field in ['title', 'description', 'employer', 'location', 'salary']}
+        data = {field: get_field(f'Enter the {field}', whitespace=True) for field in ['title', 'description', 'employer', 'location', 'salary']}
         try:
             assert data['salary'][0] == '$'
             data['salary'] = int(data['salary'][1:])
         except (AssertionError, ValueError):
-            print('Invalid salary, must be a number which begins with $')
-            return
+            raise InvalidInputError('Invalid salary, must be a number which begins with $')
 
-        response = requests.post(f'{self.url}/post-job', data=json.dumps(data), headers={ 'Authorization': f'Bearer {self.access_token}' })
+        response = self.post('/post-job', data, authenticate=True)
         if response.status_code == 200:
             print('Job posting created successfully.')
         else:
             if response.json() == { 'error': 'Limit of five job postings has been reached' }:
-                print('Limit of five job postings has been reached')
+                print('Limit of five job postings has been reached.')
             else:
                 print('Error creating job posting.')
 
     def get_job_postings(self):
-        response = requests.get(f'{self.url}/job-postings')
-        if response.status_code != 200:
-            print('Error fetching job postings.')
-            return
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
 
-        if len(job_postings := response.json()):
+        if len(job_postings) > 0:
             for posting in job_postings:
                 posting['salary'] = f'${posting["salary"]}'
                 print('\n'.join(f'{key}: {value}' for key, value in posting.items()))
@@ -407,24 +540,24 @@ permission denied. If you haven\'t logged in yet, please do so. If you have, con
             print('No job postings found.')
 
     def fetch_user_preferences(self):
-        response = requests.get(f'{self.url}/user-preferences', headers={ 'Authorization': f'Bearer {self.access_token}' })
+        response = self.get('/user-preferences', authenticate=True)
 
+        fields = [
+            'email_notifications_enabled',
+            'sms_notifications_enabled',
+            'targeted_advertising_enabled',
+            'language'
+        ]
         if response.status_code == 200:
-            self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language = response.json().values()
+            for field in fields:
+                setattr(self, field, response.json()[field])
         else:
-            self.email_notifications_enabled = None
-            self.sms_notifications_enabled = None
-            self.targeted_advertising_enabled = None
-            self.language = None
+            for field in fields:
+                setattr(self, field, None)
 
     def set_user_preferences(self, field, value):
-        response = requests.post(f'{self.url}/set-user-preferences',
-            data=json.dumps({ field: value }),
-            headers={ 'Content-Type': 'application/json', 'Authorization': f'Bearer {self.access_token}' })
-        if response.status_code == 200:
-            print('Successfully updated user preferences.')
-        else:
-            print(f'Error updating {field} to {value}')
+        response = self.post('/set-user-preferences', { field: value }, error_msg=f'Error updating {field} to {value}', authenticate=True)
+        print('Successfully updated user preferences.')
 
 if __name__ == '__main__':
     print(Path('./documents/success-story.txt').read_text().strip() + '\n')
