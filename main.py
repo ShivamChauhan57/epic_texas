@@ -291,6 +291,7 @@ class Menu:
         for i, (field, label) in enumerate(labels):
             def capitalize(s):
                 return s[0].upper() + s[1:]
+            
             if response[field] is None:
                 print(f'{i + 1}) {capitalize(label)}: Not yet set.')
             else:
@@ -322,10 +323,10 @@ class Menu:
 
     def see_job_history(self):
         response = self.get('/job-history', error_msg='Error retrieving job history.', authenticate=True)
-        if (len(response) == 0):
+        if len(response) == 0:
             job_add = input('Would you like to add a job? If so, enter add. Otherwise, simply press enter: ')
 
-            if (job_add == ''):
+            if job_add == '':
                 return
             
             data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
@@ -359,10 +360,8 @@ class Menu:
                         print(f'{i + 1}) {capitalize(label)}: {job[field]}')
 
             modify_job_history = input('Would you like to make any changes? If so, enter add to add a new job, remove to remove a job, edit to edit a job, or press enter to exit: ')
-            if (modify_job_history == ''):
-                return
             
-            if (modify_job_history == 'add'):
+            if modify_job_history == 'add':
                 data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
 
                 response = self.post('/add-job-history', data, authenticate=True)
@@ -375,11 +374,11 @@ class Menu:
                         print('Error adding job.')
                 return
             
-            if (modify_job_history == 'remove'):
+            elif modify_job_history == 'remove':
                 index = int(input("Enter the index of the job to remove: "))
                 self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg=f'Failed to delete job.', authenticate=True)
             
-            if (modify_job_history == 'edit'):
+            elif modify_job_history == 'edit':
                 field_to_edit = input('Enter the index of the field to edit: ')
             
                 try:

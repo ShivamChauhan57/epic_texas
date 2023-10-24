@@ -1,4 +1,7 @@
-# My Application README
+# Epics Project README
+
+## Warning
+This project is not compatible with native Windows environments and has not been tested on macOS. To run this project, please use either a Linux environment or the Windows Subsystem for Linux (WSL).
 
 ## Prerequisites
 
