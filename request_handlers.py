@@ -344,9 +344,10 @@ def disconnect():
         return jsonify({ 'error': 'FORMAT: { \'username\': username }'}), 400
 
     connection = session.query(Connections) \
-        .join(Users, Connections.user_id == Users.id) \
+        .join(Users, (Connections.user_id == Users.id) | (Connections.connection_id == Users.id)) \
         .filter((Users.username == username_to_disconnect) & \
-            ((Connections.user_id == g.user_id) | (Connections.connection_id == g.user_id))) \
+            ((Connections.user_id == g.user_id) | (Connections.connection_id == g.user_id)) & \
+            (Connections.request_status == 'accepted')) \
         .one_or_none()
 
     if connection is None:
@@ -425,3 +426,7 @@ def set_user_preferences():
     session.commit()
 
     return jsonify({'message': 'Preferences updated successfully.'}), 200
+
+@handlers.route('/error', methods=['GET'])
+def error():
+    assert False

@@ -75,10 +75,15 @@ class UserPreferences(Base):
     language = Column(String, CheckConstraint('language IN ("english", "spanish")'), nullable=False)
 
 if __name__ == '__main__':
-    if os.path.exists('./users.db'):
-        print('./users.db already exists!')
+    assert len(sys.argv) == 2
+    database_name = sys.argv[1]
+    if not database_name.endswith('.db'):
+        raise Exception(f'Invalid file extension of sqlite database: {database_name}')
+
+    if os.path.exists(database_name):
+        print(f'./{database_name} already exists!')
         sys.exit()
 
-    engine = create_engine('sqlite:///users.db')
+    engine = create_engine(f'sqlite:///{database_name}')
     Base.metadata.create_all(engine)
-    print('./users.db successfully created')
+    print(f'{database_name} successfully created')
