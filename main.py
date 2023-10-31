@@ -46,9 +46,7 @@ class Menu:
                     self.change_mode('log-in')
                     continue
 
-                response = self.get('/pending-requests', authenticate=True)
-                if response.status_code == 200 and len(response.json()) > 0:
-                    print('You have pending connection requests to accept or deny.')
+            self.notify()
 
             options, actions = tuple(zip(*self.options()))
             print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
@@ -107,8 +105,14 @@ class Menu:
             ]
         elif self.mode == 'job search/internship':
             options = [
-                ('See job postings', self.get_job_postings),
+                ('See job titles and apply', self.get_job_titles),
+                ('See all job postings', self.get_job_postings),
                 ('Post a job', self.post_job),
+                ('Delete a job', self.delete_job),
+                ('List applied jobs', self.applied_jobs),
+                ('List jobs not yet applied to', self.not_applied_jobs),
+                ('Mark a job', self.mark),
+                ('Unmark a job', self.unmark),
                 ('Go back', lambda: self.change_mode('main')),
             ]
         elif self.mode == 'useful links':
@@ -229,6 +233,17 @@ class Menu:
             raise StatusCodeError(error_msg)
 
         return response.json()
+
+    def notify(self):
+        if self.mode == 'main':
+            response = self.get('/pending-requests', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
+                print('NOTIFICATION: You have pending connection requests to accept or deny.\n')
+        elif self.mode == 'job search/internship':
+            response = self.get('/expired-applications', authenticate=True)
+            if response.status_code == 200:
+                for application in response.json():
+                    print(f'NOTIFICATION: You applied to "{application["title"]}", but that job posting has been deleted.\n')
 
     def login(self):
         username = get_field('Please enter your username')
@@ -538,8 +553,8 @@ class Menu:
         if response.status_code == 200:
             print('Job posting created successfully.')
         else:
-            if response.json() == { 'error': 'Limit of five job postings has been reached' }:
-                print('Limit of five job postings has been reached.')
+            if response.json() == { 'error': 'Limit of ten job postings has been reached' }:
+                print('Limit of ten job postings has been reached.')
             else:
                 print('Error creating job posting.')
 
@@ -549,9 +564,147 @@ class Menu:
         if len(job_postings) > 0:
             for posting in job_postings:
                 posting['salary'] = f'${posting["salary"]}'
-                print('\n'.join(f'{key}: {value}' for key, value in posting.items()))
+                print('\n'.join(f'{label}: {posting[label]}' for label in [
+                    'title',
+                    'employer',
+                    'description',
+                    'location',
+                    'salary',
+                    'username'
+                ]))
         else:
             print('No job postings found.')
+
+    def get_job_titles(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        job_applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            if posting['id'] in [application['job_id'] for application in job_applications]:
+                print(f'{i + 1}) {posting["title"]} (applied)')
+            else:
+                print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if choice['id'] in [application['job_id'] for application in job_applications]:
+            raise InvalidInputError('You have already applied to this position.')
+
+        print('\n'.join(f'{label}: {posting[label]}' for label in [
+                'title',
+                'employer',
+                'description',
+                'location',
+                'salary',
+                'username'
+            ]))
+
+        to_apply = input('Would you like to apply to this job? (Answer either "yes" or "no"): ').strip().lower()
+        if to_apply == 'yes':
+            graduation_date = get_field('Please enter your graduation date (mm/dd/yyyy)')
+            ideal_start_date = get_field('Please enter your ideal starting date (mm/dd/yyyy)')
+            cover_letter = get_field('Briefly elaborate on why you are the best fit for this position', whitespace=True)
+            self.post('/apply', {
+                    'job_id': choice['id'],
+                    'graduation_date': graduation_date,
+                    'ideal_start_date': ideal_start_date,
+                    'cover_letter': cover_letter
+                }, error_msg='Unable to apply for the job.', authenticate=True)
+            print('Successfully applied for the job.')
+        elif to_apply != 'no':
+            raise InvalidInputError('Invalid response.')
+
+    def delete_job(self):
+        job_postings = self.get('/jobs-posted', error_msg='Error fetching job postings.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found from you.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to delete it: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        self.post('/delete-job', { 'job_id': choice['id'] }, error_msg='Unable to delete job.', authenticate=True)
+        print('Job successfully deleted.')
+
+    def applied_jobs(self):
+        applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+
+        if len(applications) == 0:
+            print('No job applications found.')
+            return
+
+        for i, title in enumerate([application['title'] for application in applications]):
+            print(f'{i + 1}) {title}')
+
+    def not_applied_jobs(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+        applications = [application['id'] for application in applications]
+
+        if len(applications) == len(job_postings):
+            print('No remaining job postings found.')
+            return
+
+        for i, title in enumerate([posting['title'] for posting in posting if posting['id'] not in applications]):
+            print(f'{i + 1}) {title}')
+
+    def mark(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        jobs_marked = self.get('/marked', error_msg='Error fetching saved jobs.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            if posting['id'] in jobs_marked:
+                print(f'{i + 1}) {posting["title"]} (marked)')
+            else:
+                print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if choice['id'] in jobs_marked:
+            raise InvalidInputError('You have already marked this position.')
+
+        self.post('/mark', { 'job_id': choice['id'] }, error_msg='Unable to mark job.', authenticate=True)
+        print('Job successfully marked as saved.')
+
+    def unmark(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        jobs_marked = self.get('/marked', error_msg='Error fetching saved jobs.', authenticate=True)
+
+        if len(jobs_marked) == 0:
+            print('No jobs are marked as saved.')
+            return
+
+        for i, job_id in enumerate(jobs_marked):
+            posting = [posting for posting in job_postings if posting['id'] == job_id][0]
+            print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = jobs_marked[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        self.post('/unmark', { 'job_id': choice }, error_msg='Unable to unmark job.', authenticate=True)
+        print('Job successfully unmarked.')
 
     def fetch_user_preferences(self):
         response = self.get('/user-preferences', authenticate=True)

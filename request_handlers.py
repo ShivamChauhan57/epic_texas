@@ -6,7 +6,7 @@ import jwt
 import sqlite3
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
-from models import Users, Profiles, Experience, Connections, JobPostings, UserPreferences
+from models import Users, Profiles, Experience, Connections, JobPostings, JobApplications, JobsMarked, UserPreferences
 
 handlers = Blueprint('handlers', __name__)
 authenticated_handlers = Blueprint('authenticated_handlers', __name__)
@@ -366,23 +366,55 @@ def post_job():
     if set(data.keys()) != set(fields):
         return jsonify({'error': 'Missing data, all fields are required.'}), 400
 
-    if session.query(JobPostings).count() >= 5:
-        return jsonify({'error': 'Limit of five job postings has been reached' }), 400
+    if session.query(JobPostings).count() >= 10:
+        return jsonify({'error': 'Limit of ten job postings has been reached' }), 400
 
-    session.add(JobPostings(**{field: data[field] for field in fields}, user_id=g.user_id))
+    session.add(JobPostings(**{field: data[field] for field in fields}, user_id=g.user_id, deleted=False))
     session.commit()
 
     return jsonify({'message': 'Job posting created successfully.'}), 200
 
 @handlers.route('/job-postings', methods=['GET'])
 def get_job_postings():
-    fields = ['title', 'description', 'employer', 'location', 'salary']
+    fields = ['id', 'title', 'description', 'employer', 'location', 'salary']
     postings = g.session.query(*[getattr(JobPostings, field) for field in fields], Users.username) \
+        .filter(JobPostings.deleted == False) \
         .join(Users, JobPostings.user_id == Users.id).all()
 
     return jsonify([{field: posting[i] for i, field in
-        enumerate(['title', 'description', 'employer', 'location', 'salary', 'username'])}
+        enumerate(fields + ['username'])}
         for posting in postings]), 200
+
+@authenticated_handlers.route('/jobs-posted', methods=['GET'])
+def get_jobs_posted():
+    fields = ['id', 'title', 'description', 'employer', 'location', 'salary']
+    postings = g.session.query(*[getattr(JobPostings, field) for field in fields]) \
+        .filter((JobPostings.deleted == False) & (JobPostings.user_id == g.user_id)) \
+        .all()
+
+    return jsonify([{field: posting[i] for i, field in enumerate(fields)}
+        for posting in postings]), 200
+
+@authenticated_handlers.route('/delete-job', methods=['POST'])
+def delete_job():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['job_id']:
+        return jsonify({'error': 'FORMAT: { "job_id": job_id }'}), 400
+    else:
+        job_id = data['job_id']
+
+    job_to_delete = session.query(JobPostings) \
+        .filter((JobPostings.id == job_id) & (JobPostings.user_id == g.user_id)) \
+        .one_or_none()
+    if job_to_delete is None:
+        return jsonify({'error': 'Job either does not exist or was not posted by you.' }), 404
+
+    job_to_delete.deleted = True
+    session.commit()
+
+    return jsonify({'message': 'Job posting deleted successfully.'}), 200
 
 @authenticated_handlers.route('/user-preferences', methods=['GET'])
 def get_user_preferences():
@@ -426,6 +458,120 @@ def set_user_preferences():
     session.commit()
 
     return jsonify({'message': 'Preferences updated successfully.'}), 200
+
+@authenticated_handlers.route('/apply', methods=['POST'])
+def apply():
+    session = g.session
+    data = request.get_json()
+
+    labels = ['job_id', 'graduation_date', 'ideal_start_date', 'cover_letter']
+    if set(labels) != set(data.keys()):
+        return jsonify({'error': 'Invalid fields.'}), 400
+
+    for date_label in ['graduation_date', 'ideal_start_date']:
+        try:
+            data[date_label] = datetime.strptime(data[date_label], '%m/%d/%Y').date()
+        except ValueError:
+            return jsonify({'error': f'Invalid {date_label}: {data[date_label]}'}), 400
+
+    if session.query(JobPostings).filter(
+            (JobPostings.id == data['job_id']) & \
+            (JobPostings.user_id != g.user_id)) \
+        .one_or_none() is None:
+        return jsonify({'error': f'Either job doesn\'t exist or you are its poster.'}), 404
+
+    if session.query(JobApplications).filter(
+            (JobApplications.user_id == g.user_id) & \
+            (JobApplications.job_id == data['job_id'])) \
+        .count() > 0:
+        return jsonify({'error': f'You have already applied to this job.'}), 400
+
+    session.add(JobApplications(user_id=g.user_id, **data))
+    session.commit()
+
+    return jsonify({'message': 'Successfully applied to job'}), 200
+
+@authenticated_handlers.route('/applications', methods=['GET'])
+def applications():
+    session = g.session
+
+    job_applications = session.query(JobApplications.job_id, JobPostings.title) \
+        .join(JobPostings, JobApplications.job_id == JobPostings.id) \
+        .filter((JobPostings.deleted == False) & (JobApplications.user_id == g.user_id)) \
+        .all()
+
+    return jsonify([{
+            'job_id': application.job_id,
+            'title': application.title
+        } for application in job_applications]), 200
+
+@authenticated_handlers.route('/expired-applications', methods=['GET'])
+def expired_applications():
+    session = g.session
+
+    job_applications = session.query(JobPostings.id, JobPostings.title) \
+        .join(JobApplications, JobPostings.id == JobApplications.job_id) \
+        .filter((JobPostings.deleted == True) & (JobApplications.user_id == g.user_id)) \
+        .all()
+
+    job_applications_to_delete = session.query(JobApplications) \
+        .join(JobPostings, JobApplications.job_id == JobPostings.id) \
+        .filter((JobPostings.deleted == True) & (JobApplications.user_id == g.user_id)) \
+        .all()
+
+    for application in job_applications_to_delete:
+        session.delete(application)
+
+    session.commit()
+
+    return jsonify([{
+            'job_id': application.id,
+            'title': application.title
+        } for application in job_applications]), 200
+
+@authenticated_handlers.route('/mark', methods=['POST'])
+def mark():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['job_id']:
+        return jsonify({'error': 'FORMAT: { "job_id": job_id }'}), 400
+
+    if session.query(JobPostings).filter(JobPostings.id == data['job_id']).one_or_none() is None:
+        return jsonify({'error': f'Job doesn\'t exist.'}), 404
+
+    session.add(JobsMarked(user_id=g.user_id, job_id=data['job_id']))
+    session.commit()
+
+    return jsonify({'message': 'Job marked successfully.'}), 200
+
+@authenticated_handlers.route('/marked', methods=['GET'])
+def marked():
+    session = g.session
+
+    jobs_marked = session.query(JobsMarked.job_id).filter(JobsMarked.user_id == g.user_id).all()
+
+    return jsonify([job.job_id for job in jobs_marked]), 200
+
+@authenticated_handlers.route('/unmark', methods=['POST'])
+def unmark():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['job_id']:
+        return jsonify({'error': 'FORMAT: { "job_id": job_id }'}), 400
+
+    job_mark = session.query(JobsMarked).filter( \
+            (JobsMarked.user_id == g.user_id) & \
+            (JobsMarked.job_id == data['job_id']) \
+        ).one_or_none()
+    if job_mark is None:
+        return jsonify({'error': f'Job isn\'t marked.'}), 404
+
+    session.delete(job_mark)
+    session.commit()
+
+    return jsonify({'message': 'Job unmarked successfully.'}), 200
 
 @handlers.route('/error', methods=['GET'])
 def error():
