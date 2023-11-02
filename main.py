@@ -652,13 +652,13 @@ class Menu:
     def not_applied_jobs(self):
         job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
         applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
-        applications = [application['id'] for application in applications]
+        applications = [application['job_id'] for application in applications]
 
         if len(applications) == len(job_postings):
             print('No remaining job postings found.')
             return
 
-        for i, title in enumerate([posting['title'] for posting in posting if posting['id'] not in applications]):
+        for i, title in enumerate([posting['title'] for posting in job_postings if posting['id'] not in applications]):
             print(f'{i + 1}) {title}')
 
     def mark(self):
