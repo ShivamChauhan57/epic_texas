@@ -2,4 +2,5 @@ venv/
 shell.nix
 users.db
 jwt-key.txt
+client/
 __pycache__/

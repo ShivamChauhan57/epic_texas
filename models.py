@@ -63,6 +63,34 @@ class JobPostings(Base):
     location = Column(String)
     salary = Column(Integer)
 
+    deleted = Column(Boolean, nullable=False)
+
+class JobApplications(Base):
+    __tablename__ = 'job_applications'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    job_id = Column(Integer, ForeignKey('job_postings.id', ondelete='CASCADE'))
+
+    graduation_date = Column(Date, nullable=False)
+    ideal_start_date = Column(Date, nullable=False)
+    cover_letter = Column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'job_id'),
+    )
+
+class JobsMarked(Base):
+    __tablename__ = 'jobs_marked'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    job_id = Column(Integer, ForeignKey('job_postings.id', ondelete='CASCADE'))
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'job_id'),
+    )
+
 class UserPreferences(Base):
     __tablename__ = 'user_preferences'
 
@@ -75,10 +103,15 @@ class UserPreferences(Base):
     language = Column(String, CheckConstraint('language IN ("english", "spanish")'), nullable=False)
 
 if __name__ == '__main__':
-    if os.path.exists('./users.db'):
-        print('./users.db already exists!')
-        sys.exit()
+    assert len(sys.argv) == 2
+    database_name = sys.argv[1]
+    if not database_name.endswith('.db'):
+        raise Exception(f'Invalid file extension of sqlite database: {database_name}')
 
-    engine = create_engine('sqlite:///users.db')
+    '''if os.path.exists(database_name):
+        print(f'./{database_name} already exists!')
+        sys.exit()'''
+
+    engine = create_engine(f'sqlite:///{database_name}')
     Base.metadata.create_all(engine)
-    print('./users.db successfully created')
+    print(f'{database_name} successfully created')

@@ -1,10 +1,10 @@
-from getpass import getpass
-import hashlib
-import requests
 import sys
+import os
 import json
 from pathlib import Path
-import os
+import getpass
+import hashlib
+import requests
 
 class InvalidInputError(Exception):
     def __init__(self, message):
@@ -18,7 +18,7 @@ def get_field(prompt, whitespace=False, nullable=False):
     _input = input(f'{prompt}: ').strip()
     if not whitespace and any(c.isspace() for c in _input.strip()):
         raise InvalidInputError('Invalid entry, must not contain whitespace.')
-    
+
     if len(_input) == 0:
         if nullable:
             return None
@@ -40,17 +40,29 @@ class Menu:
         self.language = None
 
     def main(self):
-        while True:
+        while self.mode != 'exited':
+            if self.mode == 'main':
+                if not self.access_token:
+                    self.change_mode('log-in')
+                    continue
+
+            self.notify()
+
             options, actions = tuple(zip(*self.options()))
             print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
 
             try:
-                action = actions[int(input('Enter choice (enter the index): ').strip()) - 1]
-            except (ValueError, IndexError):
+                choice = int(input('Enter choice (enter the index): ')) - 1
+            except ValueError:
                 print('Invalid response, try again.')
+                continue
+
+            if not (0 <= choice < len(actions)):
+                print(f'Invalid index: {choice}')
+                continue
 
             try:
-                action()
+                actions[choice]()
             except (InvalidInputError, StatusCodeError) as e:
                 print(e)
 
@@ -69,17 +81,9 @@ class Menu:
                 ('Discover users', self.discover_users),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
-                ('Exit', sys.exit)
+                ('Exit', lambda: self.change_mode('exited'))
             ]
         elif self.mode == 'main':
-            if not self.access_token:
-                self.change_mode('log-in')
-                return self.options()
-
-            response = self.get(f'/pending-requests', authenticate=True)
-            if response.status_code == 200 and len(response.json()) > 0:
-                print('You have pending connection requests to accept or deny.')
-
             options = [
                 ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
@@ -101,9 +105,15 @@ class Menu:
             ]
         elif self.mode == 'job search/internship':
             options = [
-                ('See job postings', self.get_job_postings),
+                ('See job titles and apply', self.get_job_titles),
+                ('See all job postings', self.get_job_postings),
                 ('Post a job', self.post_job),
-                ('Return to main menu', lambda: self.change_mode('main')),
+                ('Delete a job', self.delete_job),
+                ('List applied jobs', self.applied_jobs),
+                ('List jobs not yet applied to', self.not_applied_jobs),
+                ('Mark a job', self.mark),
+                ('Unmark a job', self.unmark),
+                ('Go back', lambda: self.change_mode('main')),
             ]
         elif self.mode == 'useful links':
             options = [
@@ -127,7 +137,7 @@ class Menu:
                 ('Go back', lambda: self.change_mode('useful links'))
             ]
 
-            if self.access_token == None:
+            if self.access_token is None:
                 options = [('Sign Up', self.signup)] + options
         elif self.mode == 'incollege links':
             documents = {
@@ -141,8 +151,12 @@ class Menu:
                 'Brand Policy': 'brand-policy.txt'
             }
 
-            options = [(document, lambda textfile=textfile: print(Path(os.path.join(os.path.dirname(__file__), 'documents', textfile)).read_text().strip()))
-                for document, textfile in documents.items()]
+            options = []
+            for document, textfile in documents.items():
+                def print_content(textfile=textfile):
+                    print(Path(os.path.join('documents', textfile)).read_text().strip())
+
+                options.append((document, print_content))
 
             if self.access_token:
                 options += [
@@ -153,7 +167,7 @@ class Menu:
             options.append(('Go back', lambda: self.change_mode('main' if self.access_token else 'log-in')))
         elif self.mode == 'guest controls':
             self.fetch_user_preferences()
-            if any(setting == None for setting in
+            if any(setting is None for setting in
                 [self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language]):
                 print('Error fetching user preferences')
                 return [('Go back', lambda: self.change_mode('incollege links'))]
@@ -174,7 +188,7 @@ class Menu:
                 ('Spanish', lambda: self.set_user_preferences('language', 'spanish')),
                 ('Go Back', lambda: self.change_mode('incollege links'))
             ]
-            
+
         return options
 
     def change_mode(self, new_mode):
@@ -187,7 +201,7 @@ class Menu:
         assert path.startswith('/'), f'Invalid path: {path}.'
 
         headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
-        response = requests.get(f'{self.url}{path}', headers=headers)
+        response = requests.get(f'{self.url}{path}', headers=headers, timeout=5)
         if error_msg is None:
             return response
 
@@ -206,7 +220,7 @@ class Menu:
 
         headers = { 'Authorization': f'Bearer {self.access_token}' } if authenticate else {}
         headers['Content-Type'] = 'application/json'
-        response = requests.post(f'{self.url}{path}', data=json.dumps(data), headers=headers)
+        response = requests.post(f'{self.url}{path}', data=json.dumps(data), headers=headers, timeout=5)
         if error_msg is None:
             return response
 
@@ -220,13 +234,24 @@ class Menu:
 
         return response.json()
 
+    def notify(self):
+        if self.mode == 'main':
+            response = self.get('/pending-requests', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
+                print('NOTIFICATION: You have pending connection requests to accept or deny.\n')
+        elif self.mode == 'job search/internship':
+            response = self.get('/expired-applications', authenticate=True)
+            if response.status_code == 200:
+                for application in response.json():
+                    print(f'NOTIFICATION: You applied to "{application["title"]}", but that job posting has been deleted.\n')
+
     def login(self):
         username = get_field('Please enter your username')
-        passwordHash = hashlib.sha256(getpass('Enter your password: ').strip().encode()).hexdigest()
+        password_hash = hashlib.sha256(getpass.getpass('Enter your password: ').strip().encode()).hexdigest()
 
         self.access_token = self.post('/login', {
             'username': username,
-            'passwordHash': passwordHash
+            'passwordHash': password_hash
         }, error_msg='Login unsuccessful.')['token']
         print('Login successful.')
         self.change_mode('main')
@@ -239,13 +264,13 @@ class Menu:
         def username_exists(username):
             try:
                 return any(username == user['username'] for user in self.get('/list-users').json())
-            except:
+            except requests.JSONDecodeError:
                 return False    # signing up will be unsuccessful regardless
 
         def validate_password(password):
             contains_digit = any(chr(ord('0') + i) in password for i in range(10))
             contains_capital = any(chr(ord('A') + i) in password for i in range(ord('Z') - ord('A') + 1))
-            contains_special = any(c.isdigit() or 0 <= ord(c.lower()) - ord('a') < 26 or c.isspace() for c in password)
+            contains_special = not all(c.isdigit() or 0 <= ord(c.lower()) - ord('a') < 26 or c.isspace() for c in password)
 
             return 8 <= len(password) <= 12 and contains_digit and contains_capital and contains_special
 
@@ -258,11 +283,11 @@ class Menu:
         data['university'] = get_field('Enter your university', whitespace=True)
         data['major'] = get_field('Enter your subject major', whitespace=True)
 
-        password = getpass('Enter your password: ').strip()
+        password = getpass.getpass('Enter your password: ').strip()
         if not validate_password(password):
             raise InvalidInputError('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
 
-        if getpass('Confirm your password: ').strip() != password:
+        if getpass.getpass('Confirm your password: ').strip() != password:
             print('Passwords don\'t match!')
             return
 
@@ -291,7 +316,7 @@ class Menu:
         for i, (field, label) in enumerate(labels):
             def capitalize(s):
                 return s[0].upper() + s[1:]
-            
+
             if response[field] is None:
                 print(f'{i + 1}) {capitalize(label)}: Not yet set.')
             else:
@@ -303,8 +328,8 @@ class Menu:
 
         try:
             field_to_edit = labels[int(field_to_edit) - 1][0]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        except (ValueError, IndexError) as e:
+            raise InvalidInputError('Invalid response, try again.') from e
 
         if field_to_edit in next(zip(*labels))[:3]:
             raise InvalidInputError('This field is not editable.')
@@ -313,8 +338,8 @@ class Menu:
         if field_to_edit == 'years_attended':
             try:
                 new_value = int(new_value)
-            except ValueError:
-                raise InvalidInputError(f'Invalid years_attended: {new_value}')
+            except ValueError as e:
+                raise InvalidInputError(f'Invalid years_attended: {new_value}') from e
 
         self.post('/edit-profile', {field_to_edit: new_value},
             error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
@@ -328,7 +353,7 @@ class Menu:
 
             if job_add == '':
                 return
-            
+
             data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
 
             response = self.post('/add-job-history', data, authenticate=True)
@@ -353,14 +378,14 @@ class Menu:
                 for i, (field, label) in enumerate(labels):
                     def capitalize(s):
                         return s[0].upper() + s[1]
-                    
+
                     if job[field] is None:
                         print(f'{i + 1}) {capitalize(label)}: Not yet set.')
                     else:
                         print(f'{i + 1}) {capitalize(label)}: {job[field]}')
 
             modify_job_history = input('Would you like to make any changes? If so, enter add to add a new job, remove to remove a job, edit to edit a job, or press enter to exit: ')
-            
+
             if modify_job_history == 'add':
                 data = {field: get_field(f'Enter the {field}', whitespace=True, nullable=True) for field in ['title', 'employer', 'start_date', 'end_date', 'location', 'description']}
 
@@ -373,24 +398,24 @@ class Menu:
                     else:
                         print('Error adding job.')
                 return
-            
+
             elif modify_job_history == 'remove':
                 index = int(input("Enter the index of the job to remove: "))
-                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg=f'Failed to delete job.', authenticate=True)
-            
+                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg='Failed to delete job.', authenticate=True)
+
             elif modify_job_history == 'edit':
                 field_to_edit = input('Enter the index of the field to edit: ')
-            
+
                 try:
                     field_to_edit = labels[int(field_to_edit) - 1][0]
-                except (ValueError, IndexError):
-                    raise InvalidInputError('Invalid response, try again.')
-                
+                except (ValueError, IndexError) as e:
+                    raise InvalidInputError('Invalid response, try again.') from e
+
                 if field_to_edit in next(zip(*labels))[:3]:
                     raise InvalidInputError('This field is not editable.')
-                
+
                 new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
-                    
+
                 self.post('/edit-job-history', {'id': job['id'], field_to_edit: new_value},
                     error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
 
@@ -400,27 +425,27 @@ class Menu:
         users = self.get('/list-users', error_msg='Error retrieving user list.')
         if len(users):
             for user in users:
-                print(' '.join(user.values()))
+                print(f'{user["username"]} {user["firstname"]} {user["lastname"]}')
         else:
             print('No users yet.')
 
     def lookup_users(self):
         fields = {
-            'firstname': get_field(f'Enter the user\'s first name (leave empty and press enter to skip)', nullable=True),
-            'lastname': get_field(f'Enter the user\'s last name (leave empty and press enter to skip)', nullable=True),
-            'university': get_field(f'Enter the user\'s university name (leave empty and press enter to skip)', whitespace=True, nullable=True),
-            'major': get_field(f'Enter the user\'s subject major (leave empty and press enter to skip)', whitespace=True, nullable=True)
+            'firstname': get_field('Enter the user\'s first name (leave empty and press enter to skip)', nullable=True),
+            'lastname': get_field('Enter the user\'s last name (leave empty and press enter to skip)', nullable=True),
+            'university': get_field('Enter the user\'s university name (leave empty and press enter to skip)', whitespace=True, nullable=True),
+            'major': get_field('Enter the user\'s subject major (leave empty and press enter to skip)', whitespace=True, nullable=True)
         }
-        fields = {field: fields[field] for field in fields if fields[field]}
+        fields = {field_name: field for field_name, field in fields.items() if field is not None}
         if len(fields) == 0:
             raise InvalidInputError('You skipped all conditions!')
 
         matches = self.post('/lookup-user', fields, error_msg='Unable to lookup whether user is part of the InCollege system.')['matches']
         if len(matches) > 0:
-            print(f'Matches:')
+            print('Matches:')
             print('\n'.join(' '.join(user[field] for field in ['username', 'firstname', 'lastname']) for user in matches))
         else:
-            print(f'Nobody matches these criteria.')
+            print('Nobody matches these criteria.')
             return
 
         if not self.access_token:
@@ -435,12 +460,17 @@ class Menu:
         self.send_connection_request(request_target)
 
     def send_connection_request(self, username=None):
-        if username == None:
+        if username is None:
             username = get_field('Enter the username of the person to connect with')
 
         self.post('/make-connection-request', { 'username': username },
             error_msg=f'Unable to send {username} a connection request.', authenticate=True)
         print('Connection request successfully sent.')
+        '''response = self.post('/make-connection-request', { 'username': username }, authenticate=True)
+        if response.status_code == 200:
+            print('Connection request successfully sent.')
+        else:
+            print(response.json())'''
 
     def consider_requests(self):
         connection_requests = self.get('/pending-requests', error_msg='You have no connection requests.', authenticate=True)
@@ -449,9 +479,8 @@ class Menu:
             return
 
         print('Incoming connection requests:')
-        print('\n'.join(
-                ' '.join(user[field] for field in ['username', 'firstname', 'lastname']
-            ) for user in connection_requests))
+        for user in connection_requests:
+            print(f'{user["username"]} {user["firstname"]} {user["lastname"]}')
 
         users_to_accept = input('Enter the usernames of the users to accept (separated by a space). Leave empty to accept no requests: ').strip().split(' ')
         users_to_deny = input('Enter the usernames of the users to deny (separated by a space). Leave empty to deny no requests: ').strip().split(' ')
@@ -461,14 +490,14 @@ class Menu:
             'users-to-deny': [{ 'username': username } for username in users_to_deny if username != '']
         }
 
-        response = self.post(f'/accept-requests', data, error_msg='Unable to consider requests.', authenticate=True)
+        response = self.post('/accept-requests', data, error_msg='Unable to consider requests.', authenticate=True)
         accepted, denied, ignored = tuple(response[field] for field in ['accepted', 'denied', 'ignored'])
         if len(accepted):
             print('\n'.join(f'Successfully accepted {user["username"]}\'s request.' for user in accepted))
         if len(denied):
             print('\n'.join(f'Successfully denied {user["username"]}\'s request.' for user in denied))
         if len(ignored):
-                print('\n'.join(f'You do not have a connection request from {user["username"]}.' for user in ignored))
+            print('\n'.join(f'You do not have a connection request from {user["username"]}.' for user in ignored))
 
     def view_connections(self):
         connections = self.get('/connections', error_msg='Unable to view current connections.', authenticate=True)
@@ -485,8 +514,8 @@ class Menu:
 
         try:
             friend = connections[int(friend) - 1]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        except (ValueError, IndexError) as e:
+            raise InvalidInputError('Invalid response, try again.') from e
 
         response = self.post('/friend-profile', { 'id': friend['id'] },
             error_msg=f'Unable to view {friend["username"]}\'s profile.', authenticate=True)
@@ -517,15 +546,15 @@ class Menu:
         try:
             assert data['salary'][0] == '$'
             data['salary'] = int(data['salary'][1:])
-        except (AssertionError, ValueError):
-            raise InvalidInputError('Invalid salary, must be a number which begins with $')
+        except (AssertionError, ValueError) as e:
+            raise InvalidInputError('Invalid salary, must be a number which begins with $') from e
 
         response = self.post('/post-job', data, authenticate=True)
         if response.status_code == 200:
             print('Job posting created successfully.')
         else:
-            if response.json() == { 'error': 'Limit of five job postings has been reached' }:
-                print('Limit of five job postings has been reached.')
+            if response.json() == { 'error': 'Limit of ten job postings has been reached' }:
+                print('Limit of ten job postings has been reached.')
             else:
                 print('Error creating job posting.')
 
@@ -535,9 +564,147 @@ class Menu:
         if len(job_postings) > 0:
             for posting in job_postings:
                 posting['salary'] = f'${posting["salary"]}'
-                print('\n'.join(f'{key}: {value}' for key, value in posting.items()))
+                print('\n'.join(f'{label}: {posting[label]}' for label in [
+                    'title',
+                    'employer',
+                    'description',
+                    'location',
+                    'salary',
+                    'username'
+                ]))
         else:
             print('No job postings found.')
+
+    def get_job_titles(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        job_applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            if posting['id'] in [application['job_id'] for application in job_applications]:
+                print(f'{i + 1}) {posting["title"]} (applied)')
+            else:
+                print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if choice['id'] in [application['job_id'] for application in job_applications]:
+            raise InvalidInputError('You have already applied to this position.')
+
+        print('\n'.join(f'{label}: {posting[label]}' for label in [
+                'title',
+                'employer',
+                'description',
+                'location',
+                'salary',
+                'username'
+            ]))
+
+        to_apply = input('Would you like to apply to this job? (Answer either "yes" or "no"): ').strip().lower()
+        if to_apply == 'yes':
+            graduation_date = get_field('Please enter your graduation date (mm/dd/yyyy)')
+            ideal_start_date = get_field('Please enter your ideal starting date (mm/dd/yyyy)')
+            cover_letter = get_field('Briefly elaborate on why you are the best fit for this position', whitespace=True)
+            self.post('/apply', {
+                    'job_id': choice['id'],
+                    'graduation_date': graduation_date,
+                    'ideal_start_date': ideal_start_date,
+                    'cover_letter': cover_letter
+                }, error_msg='Unable to apply for the job.', authenticate=True)
+            print('Successfully applied for the job.')
+        elif to_apply != 'no':
+            raise InvalidInputError('Invalid response.')
+
+    def delete_job(self):
+        job_postings = self.get('/jobs-posted', error_msg='Error fetching job postings.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found from you.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to delete it: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        self.post('/delete-job', { 'job_id': choice['id'] }, error_msg='Unable to delete job.', authenticate=True)
+        print('Job successfully deleted.')
+
+    def applied_jobs(self):
+        applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+
+        if len(applications) == 0:
+            print('No job applications found.')
+            return
+
+        for i, title in enumerate([application['title'] for application in applications]):
+            print(f'{i + 1}) {title}')
+
+    def not_applied_jobs(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        applications = self.get('/applications', error_msg='Error fetching job applications.', authenticate=True)
+        applications = [application['job_id'] for application in applications]
+
+        if len(applications) == len(job_postings):
+            print('No remaining job postings found.')
+            return
+
+        for i, title in enumerate([posting['title'] for posting in job_postings if posting['id'] not in applications]):
+            print(f'{i + 1}) {title}')
+
+    def mark(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        jobs_marked = self.get('/marked', error_msg='Error fetching saved jobs.', authenticate=True)
+
+        if len(job_postings) == 0:
+            print('No job postings found.')
+            return
+
+        for i, posting in enumerate(job_postings):
+            if posting['id'] in jobs_marked:
+                print(f'{i + 1}) {posting["title"]} (marked)')
+            else:
+                print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        if choice['id'] in jobs_marked:
+            raise InvalidInputError('You have already marked this position.')
+
+        self.post('/mark', { 'job_id': choice['id'] }, error_msg='Unable to mark job.', authenticate=True)
+        print('Job successfully marked as saved.')
+
+    def unmark(self):
+        job_postings = self.get('/job-postings', error_msg='Error fetching job postings.')
+        jobs_marked = self.get('/marked', error_msg='Error fetching saved jobs.', authenticate=True)
+
+        if len(jobs_marked) == 0:
+            print('No jobs are marked as saved.')
+            return
+
+        for i, job_id in enumerate(jobs_marked):
+            posting = [posting for posting in job_postings if posting['id'] == job_id][0]
+            print(f'{i + 1}) {posting["title"]}')
+
+        try:
+            choice = jobs_marked[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
+        except (ValueError, IndexError):
+            raise InvalidInputError('Invalid response, try again.')
+
+        self.post('/unmark', { 'job_id': choice }, error_msg='Unable to unmark job.', authenticate=True)
+        print('Job successfully unmarked.')
 
     def fetch_user_preferences(self):
         response = self.get('/user-preferences', authenticate=True)
@@ -556,7 +723,7 @@ class Menu:
                 setattr(self, field, None)
 
     def set_user_preferences(self, field, value):
-        response = self.post('/set-user-preferences', { field: value }, error_msg=f'Error updating {field} to {value}', authenticate=True)
+        self.post('/set-user-preferences', { field: value }, error_msg=f'Error updating {field} to {value}', authenticate=True)
         print('Successfully updated user preferences.')
 
 if __name__ == '__main__':

@@ -1,0 +1,80 @@
+{
+    "user": {
+        "firstname": [
+            "Joshua",
+            "Emily",
+            "Alexander",
+            "Sofia",
+            "Timothy"
+        ],
+        "lastname": [
+            "Johnson",
+            "Smith",
+            "Rodriguez",
+            "Suzuki",
+            "Rogan"
+        ],
+        "password": [
+            "SBd:!^2#D5X.",
+            "CdyeL4S_pm?n",
+            "T^,'+?zm7krH",
+            "s3`fEk(F4weu",
+            "N![2F,#eKwS{"
+        ]
+    },
+    "profile": {
+        "bio": [
+            "I seek academic success and personal growth. I enjoy spending time with friends.",
+            "I am an ambitious individual pursuing higher education and actively participate in various campus activities.",
+            "I am a hardworking college student aiming for excellence in my academic field. Interested in exploring diverse subjects.",
+            "Motivated learner attending college to gain knowledge for future endeavors. I balance school work and social life.",
+            "I'm a college student focused on educational development with aspirations to excel in chosen career."
+        ],
+        "university": [
+            "University Of South Florida",
+            "Florida State University",
+            "University Of Florida",
+            "University Of Central Florida",
+            "Miami Univeristy"
+        ],
+        "major": [
+            "Computer Science",
+            "Computer Engineering",
+            "Data Science",
+            "Information Technology",
+            "Cybersecurity"
+        ],
+        "years-attended": [1, 2, 3, 4, 5]
+    },
+    "job": {
+        "title": [
+            "Software Engineer",
+            "Software Development Engineer",
+            "Software Developer",
+            "Computer Engineer",
+            "Security Analyst"
+        ],
+        "employer": [
+            "Google",
+            "Microsoft",
+            "Apple",
+            "Meta",
+            "Amazon"
+        ],
+        "location": [
+            "Tampa",
+            "Miami",
+            "Orlando",
+            "Gainesville",
+            "Jacksonville"
+        ],
+        "description": [
+            "Entry-level software developer position at a dynamic company; seeking a candidate with basic coding skills who is eager to learn and grow professionally.",
+            "Hiring for an entry-level software developer role, ideal for those with a software development foundation and an interest in collaborating on projects.",
+            "Exciting opportunity for an entry-level software developer to gain experience and contribute to innovative software development projects in a supportive environment.",
+            "Entry-level software developer position available at a growing company; the right candidate will possess essential coding knowledge and a passion for teamwork.",
+            "Seeking entry-level software developers to join our motivated team and work on diverse projects while continuing to develop their skills."
+        ],
+        "salary": [80, 90, 100, 110, 120]
+    }
+}
