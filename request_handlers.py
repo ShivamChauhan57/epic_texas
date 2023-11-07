@@ -4,9 +4,10 @@ from pathlib import Path
 import time
 import jwt
 import sqlite3
+from sqlalchemy import func, literal_column, case
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
-from models import Users, Profiles, Experience, Connections, JobPostings, JobApplications, JobsMarked, UserPreferences
+from models import Users, Profiles, Experience, Connections, JobPostings, JobApplications, JobsMarked, UserPreferences, Conversations, Messages
 
 handlers = Blueprint('handlers', __name__)
 authenticated_handlers = Blueprint('authenticated_handlers', __name__)
@@ -74,8 +75,8 @@ def add_user():
     session = g.session
     data = request.get_json()
 
-    fields = ['username', 'firstname', 'lastname', 'passwordHash', 'university', 'major']
-    if set(data.keys()) != set(fields):
+    fields = ['username', 'firstname', 'lastname', 'passwordHash', 'tier', 'university', 'major']
+    if set(data.keys()) != set(fields) or data['tier'] not in ['standard', 'plus']:
         return jsonify({'error': 'Invalid fields.'}), 400
 
     if session.query(Users).count() >= 10:
@@ -103,8 +104,8 @@ def add_user():
 
 @authenticated_handlers.route('/profile', methods=['GET'])
 def get_profile():
-    labels = ['username', 'firstname', 'lastname', 'bio', 'university', 'major', 'years_attended']
-    profile = g.session.query(*[getattr(Users if i < 3 else Profiles, label) for i, label in enumerate(labels)]) \
+    labels = ['username', 'firstname', 'lastname', 'tier', 'bio', 'university', 'major', 'years_attended']
+    profile = g.session.query(*[getattr(Users if i < 4 else Profiles, label) for i, label in enumerate(labels)]) \
         .join(Profiles, Users.id == Profiles.user_id) \
         .filter(Users.id == g.user_id) \
         .one_or_none()
@@ -572,6 +573,189 @@ def unmark():
     session.commit()
 
     return jsonify({'message': 'Job unmarked successfully.'}), 200
+
+@authenticated_handlers.route('/unread-messages', methods=['GET'])
+def unread_messages():
+    session = g.session
+
+    num_unread_attr = func.sum(
+            case(((Messages.read==False) & \
+                (Messages.sender != g.user_id), 1), else_=0)
+        ).label('num_unread')       # only count when 
+    conversations = session.query(Users.username, Users.firstname, Users.lastname,
+            Connections.id, num_unread_attr) \
+        .join(Conversations, (Users.id == Conversations.user1) | (Users.id == Conversations.user2)) \
+        .join(Messages, Conversations.id == Messages.conversation) \
+        .filter(Users.id != g.user_id,
+            (Conversations.user1 == g.user_id) | (Conversations.user2 == g.user_id)) \
+        .group_by(Users.username, Users.firstname, Users.lastname, Connections.id) \
+        .all()
+
+    return jsonify([{
+        'username': conversation.username,
+        'firstname': conversation.firstname,
+        'lastname': conversation.lastname,
+        'num_unread': conversation.num_unread,
+    } for conversation in conversations]), 200
+
+@authenticated_handlers.route('/messages', methods=['POST'])
+def _messages():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['username']:
+        return jsonify({'error': 'FORMAT: { "username": username }'}), 400
+
+    target_user = session.query(Users.id) \
+        .filter(Users.username == data['username']) \
+        .one_or_none()
+
+    if target_user is None:
+        return jsonify({'error': f'{data["username"]} not found.'}), 404
+    else:
+        target_user_id = target_user.id
+
+    conversation = session.query(Conversations) \
+        .filter(((Conversations.user1 == g.user_id) & (Conversations.user2 == target_user_id)) | \
+            ((Conversations.user1 == target_user_id) & (Conversations.user2 == g.user_id))) \
+        .one_or_none()
+
+    if conversation is None:
+        return jsonify({'error': 'Conversation not found.'}), 404
+
+    messages = session.query(Messages.time, Messages.content, Messages.read,
+            Users.firstname) \
+        .join(Users, Messages.sender == Users.id) \
+        .filter(Messages.conversation == conversation.id) \
+        .all()
+
+    messages_to_read = session.query(Messages) \
+        .filter(Messages.conversation == conversation.id, Messages.sender != g.user_id) \
+        .all()
+
+    for message in messages_to_read:
+        message.read = True
+
+    session.commit()
+
+    return jsonify([{
+        'time': message.time,
+        'content': message.content,
+        'read': message.read,
+        'firstname': message.firstname
+    } for message in messages]), 200
+
+@authenticated_handlers.route('/message', methods=['POST'])
+def message():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['username', 'content']:
+        return jsonify({'error': 'FORMAT: { "username": username }'}), 400
+
+    target_user = session.query(Users.id) \
+        .filter(Users.username == data['username']) \
+        .one_or_none()
+
+    if target_user is None:
+        return jsonify({'error': f'{data["username"]} not found.'}), 404
+    else:
+        target_user_id = target_user.id
+
+    conversation = session.query(Conversations.id) \
+        .filter(((Conversations.user1 == g.user_id) & (Conversations.user2 == target_user_id)) | \
+            ((Conversations.user1 == target_user_id) & (Conversations.user2 == g.user_id))) \
+        .one_or_none()
+
+    if conversation is None:
+        return jsonify({'error': 'Conversation does not exist.'}), 404
+
+    session.add(Messages(time=datetime.now(), conversation=conversation.id, content=data['content'], read=False, sender=g.user_id))
+    session.commit()
+    return jsonify({'success': f'Successfully messaged {data["username"]}.'}), 200
+
+@authenticated_handlers.route('/start-conversation', methods=['POST'])
+def start_conversation():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['username', 'content']:
+        return jsonify({'error': 'FORMAT: { "username": username, "content": content }'}), 400
+
+    if g.username == data['username']:
+        return jsonify({'error': 'You cannot DM yourself.'}), 400
+
+    target_user = session.query(Users.id) \
+        .filter(Users.username == data['username']) \
+        .one_or_none()
+
+    if target_user is None:
+        return jsonify({'error': f'{data["username"]} not found.'}), 404
+    else:
+        target_user_id = target_user.id
+
+    conversation = session.query(Conversations.id) \
+        .filter(((Conversations.user1 == g.user_id) & (Conversations.user2 == target_user_id)) | \
+            ((Conversations.user1 == target_user_id) & (Conversations.user2 == g.user_id))) \
+        .one_or_none()
+
+    if conversation is not None:
+        return jsonify({'error': 'Conversation already exists.'}), 400
+
+    connection = session.query(Connections) \
+        .filter(((Connections.user_id == g.user_id) & (Connections.connection_id == target_user_id)) | \
+            ((Connections.user_id == target_user_id) & (Connections.connection_id == g.user_id))) \
+        .one_or_none()
+    tier = session.query(Users.tier).filter(Users.id == g.user_id).one_or_none()
+    if connection is None and tier.tier == 'standard':
+        return jsonify({'error': 'I\'m sorry, you are not friends with that person.'}), 400
+
+    session.add(Conversations(user1=g.user_id, user2=target_user_id))
+    session.flush()
+    conversation = session.query(Conversations.id) \
+        .filter(((Conversations.user1 == g.user_id) & (Conversations.user2 == target_user_id)) | \
+            ((Conversations.user1 == target_user_id) & (Conversations.user2 == g.user_id))) \
+        .one_or_none()
+
+    assert conversation is not None
+
+    session.add(Messages(time=datetime.now(), conversation=conversation.id, content=data['content'], read=False, sender=g.user_id))
+
+    session.commit()
+    return jsonify({'success': f'Successfully messaged {data["username"]}.'}), 200
+
+@authenticated_handlers.route('/delete-conversation', methods=['POST'])
+def delete_conversation():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['username']:
+        return jsonify({'error': 'FORMAT: { "username": username }'}), 400
+
+    target_user = session.query(Users.id) \
+        .filter(Users.username == data['username']) \
+        .one_or_none()
+
+    if target_user is None:
+        return jsonify({'error': f'{data["username"]} not found.'}), 404
+    else:
+        target_user_id = target_user.id
+
+    conversation = session.query(Conversations) \
+        .filter(((Conversations.user1 == g.user_id) & (Conversations.user2 == target_user_id)) | \
+            ((Conversations.user1 == target_user_id) & (Conversations.user2 == g.user_id))) \
+        .one_or_none()
+
+    if conversation is None:
+        return jsonify({'error': 'Conversation does not exist.'}), 400
+
+    for message in session.query(Messages).filter(Messages.conversation == conversation.id).all():
+        session.delete(message)
+
+    session.delete(conversation)
+    session.commit()
+    return jsonify({'success': f'Successfully messaged {data["username"]}.'}), 200
+
 
 @handlers.route('/error', methods=['GET'])
 def error():

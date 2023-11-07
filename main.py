@@ -27,6 +27,12 @@ def get_field(prompt, whitespace=False, nullable=False):
 
     return _input
 
+def get_index(response, num_options):
+    if response != '' and all(c.isdigit() for c in response) and 1 <= int(response) <= num_options:
+        return int(response) - 1
+    else:
+        raise InvalidInputError('Invalid response, try again.')
+
 class Menu:
     def __init__(self, url):
         self.url = url
@@ -41,27 +47,14 @@ class Menu:
 
     def main(self):
         while self.mode != 'exited':
-            if self.mode == 'main':
-                if not self.access_token:
-                    self.change_mode('log-in')
-                    continue
-
             self.notify()
 
             options, actions = tuple(zip(*self.options()))
-            print('Available actions:\n{}'.format('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options))))
+            print('Available actions:')
+            print('\n'.join(f'{i + 1}: {option}' for i, option in enumerate(options)))
 
             try:
-                choice = int(input('Enter choice (enter the index): ')) - 1
-            except ValueError:
-                print('Invalid response, try again.')
-                continue
-
-            if not (0 <= choice < len(actions)):
-                print(f'Invalid index: {choice}')
-                continue
-
-            try:
+                choice = get_index(input('Enter choice (enter the index): '), len(actions))
                 actions[choice]()
             except (InvalidInputError, StatusCodeError) as e:
                 print(e)
@@ -84,6 +77,12 @@ class Menu:
                 ('Exit', lambda: self.change_mode('exited'))
             ]
         elif self.mode == 'main':
+            response = self.get('/unread-messages', authenticate=True)
+            if response.status_code == 200 and (num_unread := sum(conversation['num_unread'] for conversation in response.json())) > 0:
+                unread_notification = f' ({num_unread} unread notification{"s" if num_unread > 1 else ""}!)'
+            else:
+                unread_notification = ''
+
             options = [
                 ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
@@ -93,6 +92,7 @@ class Menu:
                 ('Show my network', self.view_connections),
                 ('Disconnect from a user', self.disconnect),
                 ('Job search/internship', lambda: self.change_mode('job search/internship')),
+                ('Messenger' + unread_notification, lambda: self.change_mode('messenger')),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Log out', self.logout)
@@ -187,6 +187,26 @@ class Menu:
                 ('English', lambda: self.set_user_preferences('language', 'english')),
                 ('Spanish', lambda: self.set_user_preferences('language', 'spanish')),
                 ('Go Back', lambda: self.change_mode('incollege links'))
+            ]
+        elif self.mode == 'messenger':
+            response = self.get('/unread-messages', authenticate=True)
+            if response.status_code != 200:
+                print('Unable to fetch conversations.')
+                return [('Go back', lambda: self.change_mode('main'))]
+
+            options = []
+            for conversation in response.json():
+                if (num_unread := conversation['num_unread']) > 0:
+                    unread_notification = f' ({num_unread} unread notification{"s" if num_unread > 1 else ""}!)'
+                else:
+                    unread_notification = ''
+
+                options.append((f'{conversation["firstname"]} {conversation["lastname"]}' + unread_notification,
+                    lambda conversation=conversation: self.conversate(conversation['username'])))
+
+            options += [
+                ('Start a conversation', self.start_conversation),
+                ('Go back', lambda: self.change_mode('main'))
             ]
 
         return options
@@ -283,6 +303,11 @@ class Menu:
         data['university'] = get_field('Enter your university', whitespace=True)
         data['major'] = get_field('Enter your subject major', whitespace=True)
 
+        plus = get_field('Do you want a $10/month plan. Respond either "yes" or "no"')
+        if plus.lower() not in ['yes', 'no']:
+            raise InvalidInputError('Response neither "yes" nor "no".')
+        data['tier'] = 'plus' if plus.lower() == 'yes' else 'standard'
+
         password = getpass.getpass('Enter your password: ').strip()
         if not validate_password(password):
             raise InvalidInputError('Password is not secure, should between eight and twelve characters, must contain a digit, a capital letter, and a special character.')
@@ -300,6 +325,7 @@ class Menu:
             if response.json() == { 'error': 'Limit of ten users has been reached' }:
                 print('All permitted accounts have been created, please come back later.')
             else:
+                print(response.json())
                 print('Sign up unsuccessful. Please try again.')
 
     def see_profile(self):
@@ -326,20 +352,17 @@ class Menu:
         if field_to_edit.strip() == '':
             return
 
-        try:
-            field_to_edit = labels[int(field_to_edit) - 1][0]
-        except (ValueError, IndexError) as e:
-            raise InvalidInputError('Invalid response, try again.') from e
+        field_to_edit = labels[get_index(field_to_edit, len(field_to_edit))][0]
 
         if field_to_edit in next(zip(*labels))[:3]:
             raise InvalidInputError('This field is not editable.')
 
         new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
         if field_to_edit == 'years_attended':
-            try:
+            if new_value == '' or not all(c.isdigit() for c in new_value):
+                raise InvalidInputError(f'Invalid years_attended: {new_value}')
+            else:
                 new_value = int(new_value)
-            except ValueError as e:
-                raise InvalidInputError(f'Invalid years_attended: {new_value}') from e
 
         self.post('/edit-profile', {field_to_edit: new_value},
             error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
@@ -404,12 +427,7 @@ class Menu:
                 self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg='Failed to delete job.', authenticate=True)
 
             elif modify_job_history == 'edit':
-                field_to_edit = input('Enter the index of the field to edit: ')
-
-                try:
-                    field_to_edit = labels[int(field_to_edit) - 1][0]
-                except (ValueError, IndexError) as e:
-                    raise InvalidInputError('Invalid response, try again.') from e
+                field_to_edit = labels[get_index(input('Enter the index of the field to edit: '), len(labels))]
 
                 if field_to_edit in next(zip(*labels))[:3]:
                     raise InvalidInputError('This field is not editable.')
@@ -512,10 +530,7 @@ class Menu:
         if friend.strip() == '':
             return
 
-        try:
-            friend = connections[int(friend) - 1]
-        except (ValueError, IndexError) as e:
-            raise InvalidInputError('Invalid response, try again.') from e
+        friend = connections[get_index(friend, len(connections))]
 
         response = self.post('/friend-profile', { 'id': friend['id'] },
             error_msg=f'Unable to view {friend["username"]}\'s profile.', authenticate=True)
@@ -589,10 +604,7 @@ class Menu:
             else:
                 print(f'{i + 1}) {posting["title"]}')
 
-        try:
-            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
 
         if choice['id'] in [application['job_id'] for application in job_applications]:
             raise InvalidInputError('You have already applied to this position.')
@@ -631,10 +643,7 @@ class Menu:
         for i, posting in enumerate(job_postings):
             print(f'{i + 1}) {posting["title"]}')
 
-        try:
-            choice = job_postings[int(input('Enter the index of a job above to delete it: ')) - 1]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
 
         self.post('/delete-job', { 'job_id': choice['id'] }, error_msg='Unable to delete job.', authenticate=True)
         print('Job successfully deleted.')
@@ -675,10 +684,7 @@ class Menu:
             else:
                 print(f'{i + 1}) {posting["title"]}')
 
-        try:
-            choice = job_postings[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
 
         if choice['id'] in jobs_marked:
             raise InvalidInputError('You have already marked this position.')
@@ -698,10 +704,7 @@ class Menu:
             posting = [posting for posting in job_postings if posting['id'] == job_id][0]
             print(f'{i + 1}) {posting["title"]}')
 
-        try:
-            choice = jobs_marked[int(input('Enter the index of a job above to see its entire posting: ')) - 1]
-        except (ValueError, IndexError):
-            raise InvalidInputError('Invalid response, try again.')
+        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
 
         self.post('/unmark', { 'job_id': choice }, error_msg='Unable to unmark job.', authenticate=True)
         print('Job successfully unmarked.')
@@ -725,6 +728,90 @@ class Menu:
     def set_user_preferences(self, field, value):
         self.post('/set-user-preferences', { field: value }, error_msg=f'Error updating {field} to {value}', authenticate=True)
         print('Successfully updated user preferences.')
+
+    def start_conversation(self):
+        tier = self.get('/profile', error_msg='Error retrieving tier.', authenticate=True)['tier']
+        if tier == 'plus':
+            view_targets = get_field('You are plus tier and can message with anyone. Would you like a list of all users? Respond either "yes" or "no"')
+        elif tier == 'standard':
+            view_targets = get_field('You are standard tier and can message those you are connected with. Would you like a list of all connections? Respond either "yes" or "no"')
+        else:
+            raise Exception('invalid tier')
+
+        if view_targets.lower() not in ['yes', 'no']:
+            raise InvalidInputError('Response neither "yes" nor "no".')
+
+        if view_targets.lower() == 'yes':
+            if tier == 'plus':
+                targets = self.get('/list-users', error_msg='Error retrieving user list.')
+            else:
+                targets = self.get('/connections', error_msg='Unable to retrieve current connections.', authenticate=True)
+
+            if len(targets) > 0:
+                for target in targets:
+                    print(target['username'], target['firstname'], target['lastname'])
+            else:
+                assert tier == 'standard'
+                print('You have no connections.')
+            print()
+
+        username = get_field('Enter the username of the person to message')
+        message = get_field('Enter the message', whitespace=True)
+        response = self.post('/start-conversation', { 'username': username, 'content': message }, authenticate=True)
+        if response.status_code == 200:
+            print('Message successfully sent, conversation successfully started.')
+        elif response.status_code == 400 and response.json().get('error') == 'I\'m sorry, you are not friends with that person.':
+            print('I\'m sorry, you are not friends with that person.')
+        else:
+            print(f'Unable to start conversation with {username}.')
+
+    def conversate(self, username):
+        messages = self.post('/messages', { 'username': username },
+            error_msg=f'Error fetching conversation history with {username}', authenticate=True)
+        messages.sort(key=lambda message: message['time'])
+
+        for message in messages:
+            print(message['firstname'] + ':', message['content'])
+        print()
+
+        while True:
+            print('Actions:')
+            print('1) Refresh')
+            print('2) Send a message')
+            print('3) Delete the conversation')
+            action = input('Enter the index of the action to take (leave empty to exit): ')
+            if action.strip() == '':
+                return
+            action = get_index(action, 3)
+
+            if action == 0:
+                new_messages = self.post('/messages', { 'username': username },
+                    error_msg=f'Error fetching conversation history with {username}', authenticate=True)
+                if len(messages) == len(new_messages):
+                    print('No new messages.')
+                    print()
+                    continue
+
+                new_messages.sort(key=lambda message: message['time'])
+                new_messages = new_messages[len(messages):]
+
+                for message in new_messages:
+                    print(message['firstname'] + ':', message['content'])
+                print()
+
+                messages += new_messages
+            elif action == 1:
+                message = get_field('Enter the message', whitespace=True)
+                try:
+                    self.post('/message', { 'username': username, 'content': message }, error_msg='Error sending message.', authenticate=True)
+                    print('Message successfully sent, refresh to see it.\n')
+                except StatusCodeError as e:
+                    print(e + '\n')
+            else:
+                self.post('/delete-conversation', { 'username': username }, error_msg='Unable to delete the conversation.', authenticate=True)
+                print('Conversation successfully deleted!')
+                break
+
 
 if __name__ == '__main__':
     print(Path('./documents/success-story.txt').read_text().strip() + '\n')
