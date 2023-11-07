@@ -1,6 +1,6 @@
 import os
 import sys
-from sqlalchemy import create_engine, Column, Integer, String, Date, Boolean, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Boolean, ForeignKey, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -13,6 +13,8 @@ class Users(Base):
     firstname = Column(String, nullable=False)
     lastname = Column(String, nullable=False)
     passwordHash = Column(String, nullable=False)
+
+    tier = Column(String, CheckConstraint('tier IN ("standard", "plus")'), nullable=False)
 
 class Profiles(Base):
     __tablename__ = 'profiles'
@@ -101,6 +103,23 @@ class UserPreferences(Base):
     sms_notifications_enabled = Column(Boolean, nullable=False)
     targeted_advertising_enabled = Column(Boolean, nullable=False)
     language = Column(String, CheckConstraint('language IN ("english", "spanish")'), nullable=False)
+
+class Conversations(Base):
+    __tablename__ = 'conversations'
+
+    id = Column(Integer, primary_key=True)
+    user1 = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    user2 = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+
+class Messages(Base):
+    __tablename__ = 'messages'
+
+    id = Column(Integer, primary_key=True)
+    sender = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
+    conversation = Column(Integer, ForeignKey('conversations.id', ondelete='CASCADE'))
+    time = Column(DateTime, nullable=False)
+    read = Column(Boolean, nullable=False)
+    content = Column(String, nullable=False)
 
 if __name__ == '__main__':
     assert len(sys.argv) == 2

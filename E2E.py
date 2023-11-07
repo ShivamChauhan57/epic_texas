@@ -35,7 +35,7 @@ def start_server(create_db):
         os.remove('./gunicorn.log')
 
     os.environ['DB_PATH'] = 'test.db'
-    server_process = sp.Popen('gunicorn --bind 0.0.0.0:8000 server:app --log-file /home/raunak/misc/repos/epic_texas/gunicorn.log --log-level DEBUG'.split(' '), stdout=sp.PIPE, stderr=sp.PIPE)
+    server_process = sp.Popen('gunicorn --bind 0.0.0.0:8000 server:app --log-file gunicorn.log --log-level DEBUG'.split(' '), stdout=sp.PIPE, stderr=sp.PIPE)
     time.sleep(0.5)   # wait for backend to start
     assert main.Menu(url='http://localhost:8000').get('/list-users').json() == []
     yield
@@ -49,6 +49,7 @@ class TestFactory:
 
         self.test_values_json = json.loads(Path('test-values.json').read_text())
         self.users = []
+        self.jobs = []
         self.user_session = None
 
         self.distribution = {option: 0 for option in [
@@ -60,17 +61,38 @@ class TestFactory:
             'View requests',
             'Show my network',
             'Disconnect from a user',
+            'Post a job',
+            'List applied jobs',
+            'List jobs not yet applied to',
+            'Unmark a job',
+            'See all job postings',
+            'Job search/internship',
+            'Go back',
+            'InCollege Video',
             'Log out'
         ]}
 
         self.options_not_covered = [
-            'InCollege Video',
             'Lookup users',
-            'Useful links',
-            'InCollege Important Links',
             'Exit',
             'Create/view/edit profile',
-            'Job search/internship'
+            'See job titles and apply',
+            'Mark a job',
+            'Delete a job',
+            'General',
+            'Browse InCollege',
+            'Business Solutions',
+            'Useful links',
+            'Help Center',
+            'About',
+            'Press',
+            'Blog',
+            'Careers',
+            'Developers',
+            'Return',
+            'InCollege Important Links',
+            'Directories',
+            'Go Back'
         ]
 
     def get_test_value(self, obj, attr):
@@ -173,6 +195,9 @@ class TestFactory:
                         new_user = dict(inputs)
                         new_user['connection-requests'] = []
                         new_user['connections'] = []
+                        new_user['jobs-posted'] = []
+                        new_user['jobs-marked'] = []
+                        new_user['jobs-applied'] = []
                         self.users.append(new_user)
                     else:
                         self.assert_output('All permitted accounts have been created, please come back later.')
@@ -305,14 +330,222 @@ class TestFactory:
                     assert self.menu.access_token is None
                     assert self.menu.mode == 'log-in'
                     self.user_session = None
+                case 'Job search/internship':
+                    assert self.menu.mode == 'job search/internship'
+                case 'InCollege Important Links':
+                    assert self.menu.mode == 'incollege links'
+                case 'Post a job':
+                    fields = ['title', 'description', 'employer', 'location', 'salary']
+                    inputs = [self.get_test_value('job', attr) for attr in fields]
+                    inputs[-1] = '$' + str(inputs[-1])
+
+                    yield from iter(inputs)
+
+                    if len(self.jobs) < 10:
+                        self.assert_output('Job posting created successfully.')
+                        try:
+                            new_job = dict([(fields[i], inputs[i]) for i in range(len(fields))])
+                        except (ValueError):
+                            assert False
+                        username = self.users[self.user_session]['username']
+                        new_job['deleted'] = False
+                        self.user()["jobs-posted"].append(new_job)
+                        new_job['username'] = username
+                        self.jobs.append(new_job)
+                    else:
+                        self.assert_output('Limit of ten job postings has been reached.')
+                case 'See all job postings':
+                    job_postings = [job for job in self.jobs if job["deleted"] == False]
+                    if len(job_postings) > 0:
+                        out, err = self.capsys.readouterr()
+                        output_lines = out.strip().split('\n')[:6*len(job_postings)]
+                        expected_lines = [f'title: {job["title"]}' for job in job_postings] + \
+                        [f'employer: {job["employer"]}' for job in job_postings] + \
+                        [f'description: {job["description"]}' for job in job_postings] + \
+                        [f'location: {job["location"]}' for job in job_postings] + \
+                        [f'salary: {job["salary"]}' for job in job_postings] + \
+                        [f'username: {job["username"]}' for job in job_postings]
+                        assert set(output_lines) == set(expected_lines)
+                    else:
+                        self.assert_output('No job postings found.')
+                case 'Delete a job':
+                    job_postings = [job for job in self.user()["jobs-posted"] if job["deleted"] == False]
+                    if len(job_postings) > 0:
+                        out, err = self.capsys.readouterr()
+                        print(out)
+                        output_lines = out.strip().split('\n')[:len(job_postings)]
+                        expected_lines = [f'{i+1}) {job["title"]}' for i, job in enumerate(job_postings)]
+                        #print(expected_lines)
+                        #print(output_lines)
+                        assert set(output_lines[:len(job_postings)]) == set(expected_lines)
+                        delete_job = bernoulli(3/4)
+                        if delete_job:
+                            choice_delete = random.choice(job_postings)
+                            for posting in self.jobs:
+                                if posting == choice_delete:
+                                    posting["deleted"] = True
+                                    choice_delete["deleted"] = True
+                                    break
+                        self.assert_output('Job successfully deleted.')
+                            
+                    else:
+                        self.assert_output('No job postings found from you.')
+                case 'List applied jobs':
+                    applied_jobs = [job for job in self.user()["jobs-applied"]]
+                    if len(applied_jobs) == 0:
+                        self.assert_output('No job applications found.')
+                    else:
+                        expected_lines = []
+                        for i, job in applied_jobs:
+                            expected_lines.append(f'{i + 1}) {applied_jobs["title"]}')
+                        out, err = self.capsys.readouterr()
+                        output_lines = out.strip().split('\n')[:len(applied_jobs)]
+                        assert set(output_lines) == set(expected_lines)
+                case 'List jobs not yet applied to':
+                    job_postings = [job for job in self.jobs if job["deleted"] == False]
+                    applied_jobs = [job for job in self.users[self.user_session]["jobs-applied"]]
+                    unapplied_jobs = []
+                    if len(applied_jobs) == len(job_postings):
+                        self.assert_output('No remaining job postings found.')
+                    else:
+                        expected_lines = []
+                        for i, title in enumerate([posting['title'] for posting in job_postings if posting['title'] not in applied_jobs]):
+                            expected_lines.append(f'{i + 1}) {title}')
+                            unapplied_jobs.append(title)
+                        out, err = self.capsys.readouterr()
+                        output_lines = out.strip().split('\n')[:len(unapplied_jobs)]
+                        assert set(output_lines) == set(expected_lines)
+                case 'Mark a job':
+                    job_postings = [job for job in self.jobs if job["deleted"] == False]
+                    jobs_marked = [job for job in self.user()["jobs-marked"]]
+                    expected_lines = []
+                    jobs_unmarked = []
+                    if len(job_postings) == 0:
+                        self.assert_output('No job postings found.')
+                    else: 
+                        for i, posting in enumerate(job_postings):
+                            if posting in jobs_marked:
+                                expected_lines.append(f'{i + 1}) {posting["title"]} (marked)')
+                            else:
+                                expected_lines.append(f'{i + 1}) {posting["title"]}')
+                                jobs_unmarked.append((i, posting))
+                        out, err = self.capsys.readouterr()
+                        output_lines = out.strip().split('\n')[:len(job_postings)]
+                        assert set(output_lines) == set(expected_lines)
+                        if len(jobs_unmarked) > 0:
+                            mark_id, mark_choice = random.choice(jobs_unmarked)
+                            
+                            yield mark_choice
+                            self.assert_output('Job successfully marked as saved.',
+                                        error_msg=f'Unable to mark job, target: {mark_choice}')
+                            self.users[self.user_session]['jobs-marked'].append(mark_id)
+                case 'Unmark a job':
+                    jobs_marked = [job for job in self.user()["jobs-marked"]]
+                    expected_lines = []
+                    jobs_unmarked = []
+                    if len(jobs_marked) == 0:
+                        self.assert_output('No jobs are marked as saved.')
+                    else:
+                        for i, posting in enumerate(jobs_marked):
+                            if posting in jobs_marked:
+                                expected_lines.append(f'{i + 1}) {posting["title"]}')
+                        out, err = self.capsys.readouterr()
+                        output_lines = out.strip().split('\n')[:len(jobs_marked)]
+                        assert set(output_lines) == set(expected_lines)
+                        if len(jobs_marked) > 0:
+                            mark_id, mark_choice = random.choice(jobs_marked)
+                            yield mark_choice
+
+                            self.assert_output('Job successfully unmarked.',
+                                        error_msg=f'Unable to unmark job.')
+                            self.users[self.user_session]['jobs-marked'].remove(mark_id)
+                case 'Lookup users':
+                    if self.menu.access_token is not None:
+                        if len(self.users) > 0:
+                            find_user = bernoulli(3/4)
+                            if find_user:
+                                user = random.choice(self.users)
+                                enter_first_name = bernoulli(3/4)
+                                if enter_first_name:
+                                    first_name = user['firstname']
+                                enter_last_name = bernoulli(3/4)
+                                if enter_last_name:
+                                    last_name = user['lastname']
+                                enter_university = bernoulli(3/4)
+                                if enter_university:
+                                    university = user['university']
+                                enter_major = bernoulli(3/4)
+                                if enter_major:
+                                    major = user['major']
+
+                                if len(first_name) > 0 or len(last_name) > 0 or len(university) > 0 or len(major) > 0:
+                                    out, err = self.capsys.readouterr()
+                                    valid_users = [user for user in self.users if user["firstname"] == first_name or user["lastname"] == last_name
+                                                   or user["university"] == university or user["major"] == major]
+                                    print(valid_users)
+                                    output_lines = out.strip().split('\n')
+                                    assert output_lines[0] == 'Matches:'
+                                    assert output_lines[1:len(valid_users)] == {f'{user["username"]} {user["firstname"]} {user["lastname"]}' for user in valid_users}
+                                    
+                                    assert output_lines[-1] == 'Would you like to connect to any one of the matches displayed above? If so, enter their username. If not, simply press enter'
+                                    enter_match = bernoulli(3/4)
+                                    if enter_match:
+                                        user = random.choice(valid_users)
+                                        if i == self.user_session or \
+                                        self.user_session in self.users[i]['connection-requests'] or \
+                                        i in self.user()['connection-requests'] + self.user()['connections']:
+                                            self.assert_output(f'Unable to send {user["username"]} a connection request.')
+                                        else:
+                                            self.assert_output('Connection request successfully sent.',
+                                            error_msg=f'user: {self.user()["username"]}, target: {user}')
+                                            self.users[self.user_session]['connection-requests'].append(choice_id)
+                                    else:
+                                        assert self.menu.mode == 'main'
+
+                        else:
+                            assert self.menu.mode == 'main'
+                case 'InCollege Video':
+                    self.assert_output('Video is now playing')
+                case 'Useful links':
+                    assert self.menu.mode == 'useful links'
+                case 'General':
+                    assert self.menu.mode == 'general'
+                case 'Browse InCollege':
+                    self.assert_output('Under construction')
+                case 'Business Solutions':
+                    self.assert_output('Under construction')
+                case 'Directories':
+                    self.assert_output('Under construction')
+                case 'Help Center':
+                    self.assert_output('We\'re here to help')
+                case 'About':
+                    self.assert_output('InCollege: Welcome to InCollege, the world\'s largest college student network with many users in many countries and territories worldwide.')
+                case 'Press':
+                    self.assert_output('InCollege Pressroom: Stay on top of the latest news, updates, and reports.')
+                case 'Blog':
+                    self.assert_output('Under construction')
+                case 'Careers':
+                    self.assert_output('Under construction')
+                case 'Developers':
+                    self.assert_output('Under construction')
+                case 'Go back':
+                    if self.menu.access_token is None:
+                        assert self.menu.mode == 'log-in'
+                    else:
+                        assert self.menu.mode == 'main'
+                case 'Return':
+                    assert self.menu.mode == 'useful links'
                 case _:
                     raise Exception(f'Not implemented: {options[option]}')
 
+        assert self.menu.mode in ['job search/internship', 'main', 'log-in']
+        if self.menu.mode == 'job search/internship':
+            yield next(zip(*self.menu.options())).index('Go back') + 1
         if self.menu.mode == 'main':
             yield next(zip(*self.menu.options())).index('Log out') + 1
-
-        yield next(zip(*self.menu.options())).index('Exit') + 1
-
+        if self.menu.mode == 'log-in':
+            yield next(zip(*self.menu.options())).index('Exit') + 1
+        assert self.menu.mode == 'exited', self.menu.mode
 @pytest.mark.usefixtures('start_server')
 def test(capsys):
     if os.path.exists('./dbg.txt'):
