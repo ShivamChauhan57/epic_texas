@@ -1,59 +1,76 @@
-import http.server
-from socketserver import ThreadingMixIn
-import socketserver
-import time
+from flask import Flask, g, request, jsonify
 import json
 import sys
-import sqlite3
 import inspect
 from pathlib import Path
 import jwt
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+from models import Base, Users
+import logging
+import argparse
+import signal
+import os
+import psutil
 
-from request_handlers import get_requests, post_requests
+from request_handlers import handlers, authenticated_handlers
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+def create_session(Session):
+    g.session = Session()
+    g.session.begin()
 
-def handle_request(self, request_type):
-    request_handler = {**get_requests, **post_requests}.get(self.path)
-    if request_handler == None:
-        self.send_error(404)
-        return
+def close_session(response):
+    if hasattr(g, 'session'):
+        g.session.close()
+    return response
 
-    kwargs = dict()
-    if request_type == 'post':
-        content_length = int(self.headers['Content-Length'])
-        raw_data = self.rfile.read(content_length)
-        kwargs['data'] = json.loads(raw_data)
+def authenticate():
+    try:
+        token = request.headers['Authorization'].strip().split(' ')[1]
+        payload = jwt.decode(token, Path('./jwt-key.txt').read_text().strip(), algorithms=['HS256'])
+        g.user_id, g.username = payload['user_id'], payload['username']
+    except (KeyError, IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
+        print(e)
+        return 'Unauthorized', 401
 
-    if 'user' in inspect.signature(request_handler).parameters:
-        try:
-            assert self.headers['Authorization']
-            token = self.headers['Authorization'].strip().split(' ')[1]
-            payload = jwt.decode(token, Path('./jwt-key.txt').read_text().strip(), algorithms=['HS256'])
-            kwargs['user'] = (payload['user_id'], payload['username'])
-        except (AssertionError, IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            self.send_error(401)
-            return
+    if g.session.query(Users).filter(Users.id == g.user_id).one_or_none() is None:
+        return 'Unauthorized', 401
 
-    with sqlite3.connect('users.db') as conn:
-        response, status = request_handler(conn, **kwargs)
+def parse():
+    parser = argparse.ArgumentParser(description='Server Configuration')
+    parser.add_argument(
+        '--port', type=int, required=True, help='Port number for the server to listen on'
+    )
+    parser.add_argument(
+        '--db',
+        type=str,
+        default='users.db',
+        help='Path to the SQLite file (default: users.db)',
+    )
 
-    response = json.dumps(response)
+    return tuple(getattr(parser.parse_args(), arg) for arg in ['port', 'db'])
 
-    self.send_response(status)
-    self.send_header('Content-Type', 'application/json')
-    self.send_header('Content-Length', len(response))
-    self.end_headers()
-    self.wfile.write(response.encode())
+db_path = os.environ.get('DB_PATH' , 'users.db')
+assert os.path.exists(db_path)
 
-class ThreadedHTTPServer(ThreadingMixIn, socketserver.TCPServer):
-    allow_reuse_address = True
+app = Flask(__name__)
 
-class MyRequestHandler(http.server.SimpleHTTPRequestHandler):
-    do_GET = lambda self: handle_request(self, 'get')
-    do_POST = lambda self: handle_request(self, 'post')
+engine = create_engine(f'sqlite:///{db_path}')
+Session = sessionmaker(bind=engine)
+
+app.before_request_funcs = {
+    'handlers': [ lambda: create_session(Session) ],
+    'authenticated_handlers': [lambda: create_session(Session), authenticate]
+}
+
+app.after_request_funcs = {
+    'handlers': [ close_session ],
+    'authenticated_handlers': [ close_session ]
+}
+
+app.register_blueprint(handlers)
+app.register_blueprint(authenticated_handlers)
 
 if __name__ == '__main__':
-    with ThreadedHTTPServer(('0.0.0.0', PORT), MyRequestHandler) as httpd:
-        print(f'Serving on port {PORT}')
-        httpd.serve_forever()
+    port, db_path = parse()
+    app.run(port=port, threaded=True)
