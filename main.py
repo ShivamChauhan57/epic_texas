@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+from datetime import date, datetime
 from pathlib import Path
 import getpass
 import hashlib
@@ -79,7 +80,7 @@ class Menu:
         elif self.mode == 'main':
             response = self.get('/unread-messages', authenticate=True)
             if response.status_code == 200 and (num_unread := sum(conversation['num_unread'] for conversation in response.json())) > 0:
-                unread_notification = f' ({num_unread} unread notification{"s" if num_unread > 1 else ""}!)'
+                unread_notification = f' ({num_unread} unread message{"s" if num_unread > 1 else ""}!)'
             else:
                 unread_notification = ''
 
@@ -255,15 +256,51 @@ class Menu:
         return response.json()
 
     def notify(self):
+        notifications = []
+
+        response = self.post('/notifications', { 'menu': self.mode }, authenticate=True)
+        if response.status_code == 200:
+            for notification in response.json():
+                notifications.append(notification['content'])
+
         if self.mode == 'main':
             response = self.get('/pending-requests', authenticate=True)
             if response.status_code == 200 and len(response.json()) > 0:
-                print('NOTIFICATION: You have pending connection requests to accept or deny.\n')
+                notifications.append('You have pending connection requests to accept or deny.')
+
+            response = self.get('/unread-messages', authenticate=True)
+            if response.status_code == 200 and sum(conversation['num_unread'] for conversation in response.json()) > 0:
+                notifications.append('You have messages waiting for you.')
+
+            response = self.get('/applications', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
+                last_application = max(response.json(), key=lambda application: application['application-date'])
+                difference = date.today() - datetime.strptime(last_application['application-date'], '%Y-%m-%d').date()
+                if difference.days >= 7:
+                    notifications.append('Remember - you\'re going to want to apply to have a job when you graduate. Make sure that you start to apply for jobs today!')
+
+            response = self.get('/profile', authenticate=True)
+            if response.status_code == 200:
+                for field in response.json():
+                    if response.json()[field] is None:
+                        notifications.append(f'Don\'t forget to specify {field} in your profile.')
         elif self.mode == 'job search/internship':
+            response = self.get('/applications', authenticate=True)
+            if response.status_code == 200:
+                if (num_applied := len(response.json())) > 0:
+                    notifications.append(f'You have currently applied to {num_applied} jobs.\n')
+
             response = self.get('/expired-applications', authenticate=True)
             if response.status_code == 200:
                 for application in response.json():
-                    print(f'NOTIFICATION: You applied to "{application["title"]}", but that job posting has been deleted.\n')
+                    notifications.append(f'You applied to "{application["title"]}", but that job posting has been deleted.\n')
+
+        if len(notifications) > 0:
+            print('NOTIFICATIONS:')
+            for notification in notifications:
+                print('-', notification)
+
+            print()
 
     def login(self):
         username = get_field('Please enter your username')
@@ -643,7 +680,7 @@ class Menu:
         for i, posting in enumerate(job_postings):
             print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of a job above to delete the posting: '), len(job_postings))]
 
         self.post('/delete-job', { 'job_id': choice['id'] }, error_msg='Unable to delete job.', authenticate=True)
         print('Job successfully deleted.')
@@ -684,7 +721,7 @@ class Menu:
             else:
                 print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of the job to mark it as saved: '), len(job_postings))]
 
         if choice['id'] in jobs_marked:
             raise InvalidInputError('You have already marked this position.')
@@ -704,7 +741,7 @@ class Menu:
             posting = [posting for posting in job_postings if posting['id'] == job_id][0]
             print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of the job to unmark it: '), len(job_postings))]['id']
 
         self.post('/unmark', { 'job_id': choice }, error_msg='Unable to unmark job.', authenticate=True)
         print('Job successfully unmarked.')

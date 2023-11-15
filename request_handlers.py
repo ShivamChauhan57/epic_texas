@@ -1,5 +1,5 @@
 from flask import request, g, jsonify, Blueprint
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import time
 import jwt
@@ -7,7 +7,7 @@ import sqlite3
 from sqlalchemy import func, literal_column, case
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
-from models import Users, Profiles, Experience, Connections, JobPostings, JobApplications, JobsMarked, UserPreferences, Conversations, Messages
+from models import Users, Profiles, Experience, Connections, JobPostings, JobApplications, JobsMarked, UserPreferences, Conversations, Messages, Notifications
 
 handlers = Blueprint('handlers', __name__)
 authenticated_handlers = Blueprint('authenticated_handlers', __name__)
@@ -98,6 +98,12 @@ def add_user():
     session.add(Profiles(user_id=new_user.id, **{field: data[field] for field in fields[-2:]}))
     session.add(UserPreferences(user_id=new_user.id, email_notifications_enabled=True,
         sms_notifications_enabled=True, targeted_advertising_enabled=True, language='english'))
+    
+    for user in session.query(Users.id).all():
+        if user.id == new_user.id:
+            continue
+
+        session.add(Notifications(user_id=user.id, menu='main', content=f'{data["firstname"]} {data["lastname"]} has joined InCollege.'))
     session.commit()
 
     return jsonify({'success': 'User successfully added'}), 200
@@ -371,6 +377,12 @@ def post_job():
         return jsonify({'error': 'Limit of ten job postings has been reached' }), 400
 
     session.add(JobPostings(**{field: data[field] for field in fields}, user_id=g.user_id, deleted=False))
+    for user in session.query(Users.id).all():
+        if user.id == g.user_id:
+            continue
+
+        session.add(Notifications(user_id=user.id, menu='main', content=f'A new job "{data["title"]}" has been posted'))
+        session.add(Notifications(user_id=user.id, menu='job search/internship', content=f'A new job "{data["title"]}" has been posted'))
     session.commit()
 
     return jsonify({'message': 'Job posting created successfully.'}), 200
@@ -487,7 +499,7 @@ def apply():
         .count() > 0:
         return jsonify({'error': f'You have already applied to this job.'}), 400
 
-    session.add(JobApplications(user_id=g.user_id, **data))
+    session.add(JobApplications(user_id=g.user_id, **data, application_date=date.today()))
     session.commit()
 
     return jsonify({'message': 'Successfully applied to job'}), 200
@@ -496,14 +508,15 @@ def apply():
 def applications():
     session = g.session
 
-    job_applications = session.query(JobApplications.job_id, JobPostings.title) \
+    job_applications = session.query(JobApplications.job_id, JobApplications.application_date, JobPostings.title) \
         .join(JobPostings, JobApplications.job_id == JobPostings.id) \
         .filter((JobPostings.deleted == False) & (JobApplications.user_id == g.user_id)) \
         .all()
 
     return jsonify([{
             'job_id': application.job_id,
-            'title': application.title
+            'title': application.title,
+            'application-date': str(application.application_date)
         } for application in job_applications]), 200
 
 @authenticated_handlers.route('/expired-applications', methods=['GET'])
@@ -583,12 +596,12 @@ def unread_messages():
                 (Messages.sender != g.user_id), 1), else_=0)
         ).label('num_unread')       # only count when 
     conversations = session.query(Users.username, Users.firstname, Users.lastname,
-            Connections.id, num_unread_attr) \
+            Conversations.id, num_unread_attr) \
         .join(Conversations, (Users.id == Conversations.user1) | (Users.id == Conversations.user2)) \
         .join(Messages, Conversations.id == Messages.conversation) \
         .filter(Users.id != g.user_id,
             (Conversations.user1 == g.user_id) | (Conversations.user2 == g.user_id)) \
-        .group_by(Users.username, Users.firstname, Users.lastname, Connections.id) \
+        .group_by(Users.username, Users.firstname, Users.lastname, Conversations.id) \
         .all()
 
     return jsonify([{
@@ -756,6 +769,25 @@ def delete_conversation():
     session.commit()
     return jsonify({'success': f'Successfully messaged {data["username"]}.'}), 200
 
+@authenticated_handlers.route('/notifications', methods=['POST'])
+def _notifications():
+    session = g.session
+    data = request.get_json()
+
+    if list(data.keys()) != ['menu']:
+        return jsonify({'error': 'FORMAT: { "menu": menu }'}), 400
+
+    notifications = session.query(Notifications) \
+        .filter(Notifications.user_id == g.user_id, Notifications.menu == data['menu']) \
+        .all()
+    response = jsonify([{'content': notification.content} for notification in notifications])
+
+    if len(notifications) > 0:
+        for notification in notifications:
+            session.delete(notification)
+        session.commit()
+
+    return response, 200
 
 @handlers.route('/error', methods=['GET'])
 def error():
