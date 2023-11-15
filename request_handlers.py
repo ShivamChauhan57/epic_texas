@@ -449,7 +449,7 @@ def get_user_preferences():
 @authenticated_handlers.route('/set-user-preferences', methods=['POST'])
 def set_user_preferences():
     session = g.session
-    data = request.get_data()
+    data = request.get_json()
 
     if len(data) != 1:
         return jsonify({'error': 'FORMAT: { field: value }'}), 400
@@ -458,7 +458,7 @@ def set_user_preferences():
         'sms_notifications_enabled',
         'targeted_advertising_enabled',
         'language']:
-        return jsonify({'error': f'Invalid field: {field}'})
+        return jsonify({'error': f'Invalid field: {field}'}), 400
 
     if (field == 'language' and value not in ['english', 'spanish']) or \
         not isinstance(value, bool):
