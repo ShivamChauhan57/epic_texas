@@ -77,6 +77,7 @@ class JobApplications(Base):
     graduation_date = Column(Date, nullable=False)
     ideal_start_date = Column(Date, nullable=False)
     cover_letter = Column(String, nullable=False)
+    application_date = Column(Date, nullable=False)
 
     __table_args__ = (
         UniqueConstraint('user_id', 'job_id'),
@@ -119,6 +120,14 @@ class Messages(Base):
     conversation = Column(Integer, ForeignKey('conversations.id', ondelete='CASCADE'))
     time = Column(DateTime, nullable=False)
     read = Column(Boolean, nullable=False)
+    content = Column(String, nullable=False)
+
+class Notifications(Base):
+    __tablename__ = 'notifications'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    menu = Column(String, nullable=False)
     content = Column(String, nullable=False)
 
 if __name__ == '__main__':

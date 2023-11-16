@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+from datetime import date, datetime
 from pathlib import Path
 import getpass
 import hashlib
@@ -72,6 +73,7 @@ class Menu:
                 ('Sign up', self.signup),
                 ('Lookup users', self.lookup_users),
                 ('Discover users', self.discover_users),
+                ('Learn a skill', lambda: self.change_mode('skills')),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Exit', lambda: self.change_mode('exited'))
@@ -79,7 +81,7 @@ class Menu:
         elif self.mode == 'main':
             response = self.get('/unread-messages', authenticate=True)
             if response.status_code == 200 and (num_unread := sum(conversation['num_unread'] for conversation in response.json())) > 0:
-                unread_notification = f' ({num_unread} unread notification{"s" if num_unread > 1 else ""}!)'
+                unread_notification = f' ({num_unread} unread message{"s" if num_unread > 1 else ""}!)'
             else:
                 unread_notification = ''
 
@@ -87,6 +89,7 @@ class Menu:
                 ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
                 ('Lookup users', self.lookup_users),
+                ('Learn a skill', lambda: self.change_mode('skills')),
                 ('Send connection requests', self.send_connection_request),
                 ('View requests', self.consider_requests),
                 ('Show my network', self.view_connections),
@@ -96,6 +99,15 @@ class Menu:
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Log out', self.logout)
+            ]
+        elif self.mode == 'skills':
+            options = [
+                ('Learn React', self.under_construction),
+                ('Learn Node.js', self.under_construction),
+                ('Learn Postgres', self.under_construction),
+                ('Learn Python', self.under_construction),
+                ('Learn Machine Learning', self.under_construction),
+                ('Go back', lambda: self.change_mode('main' if self.access_token is not None else 'log-in'))
             ]
         elif self.mode == 'profile':
             options = [
@@ -183,9 +195,23 @@ class Menu:
 
             options.append(('Go back', lambda: self.change_mode('incollege links')))
         elif self.mode == 'languages':
+            self.fetch_user_preferences()
+            if any(setting is None for setting in
+                [self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language]):
+                print('Error fetching user language')
+                return [('Go back', lambda: self.change_mode('incollege links'))]
+
+            english_option, spanish_option = 'English', 'Spanish'
+            if self.language == 'english':
+                english_option += ' (current language)'
+            elif self.language == 'spanish':
+                spanish_option += ' (current language)'
+            else:
+                raise Exception(f'Invalid language value: {self.language}')
+
             options = [
-                ('English', lambda: self.set_user_preferences('language', 'english')),
-                ('Spanish', lambda: self.set_user_preferences('language', 'spanish')),
+                (english_option, lambda: self.set_user_preferences('language', 'english')),
+                (spanish_option, lambda: self.set_user_preferences('language', 'spanish')),
                 ('Go Back', lambda: self.change_mode('incollege links'))
             ]
         elif self.mode == 'messenger':
@@ -255,15 +281,51 @@ class Menu:
         return response.json()
 
     def notify(self):
+        notifications = []
+
+        response = self.post('/notifications', { 'menu': self.mode }, authenticate=True)
+        if response.status_code == 200:
+            for notification in response.json():
+                notifications.append(notification['content'])
+
         if self.mode == 'main':
             response = self.get('/pending-requests', authenticate=True)
             if response.status_code == 200 and len(response.json()) > 0:
-                print('NOTIFICATION: You have pending connection requests to accept or deny.\n')
+                notifications.append('You have pending connection requests to accept or deny.')
+
+            response = self.get('/unread-messages', authenticate=True)
+            if response.status_code == 200 and sum(conversation['num_unread'] for conversation in response.json()) > 0:
+                notifications.append('You have messages waiting for you.')
+
+            response = self.get('/applications', authenticate=True)
+            if response.status_code == 200 and len(response.json()) > 0:
+                last_application = max(response.json(), key=lambda application: application['application-date'])
+                difference = date.today() - datetime.strptime(last_application['application-date'], '%Y-%m-%d').date()
+                if difference.days >= 7:
+                    notifications.append('Remember - you\'re going to want to apply to have a job when you graduate. Make sure that you start to apply for jobs today!')
+
+            response = self.get('/profile', authenticate=True)
+            if response.status_code == 200:
+                for field in response.json():
+                    if response.json()[field] is None:
+                        notifications.append(f'Don\'t forget to specify {field} in your profile.')
         elif self.mode == 'job search/internship':
+            response = self.get('/applications', authenticate=True)
+            if response.status_code == 200:
+                if (num_applied := len(response.json())) > 0:
+                    notifications.append(f'You have currently applied to {num_applied} jobs.\n')
+
             response = self.get('/expired-applications', authenticate=True)
             if response.status_code == 200:
                 for application in response.json():
-                    print(f'NOTIFICATION: You applied to "{application["title"]}", but that job posting has been deleted.\n')
+                    notifications.append(f'You applied to "{application["title"]}", but that job posting has been deleted.\n')
+
+        if len(notifications) > 0:
+            print('NOTIFICATIONS:')
+            for notification in notifications:
+                print('-', notification)
+
+            print()
 
     def login(self):
         username = get_field('Please enter your username')
@@ -352,7 +414,7 @@ class Menu:
         if field_to_edit.strip() == '':
             return
 
-        field_to_edit = labels[get_index(field_to_edit, len(field_to_edit))][0]
+        field_to_edit = labels[get_index(field_to_edit, len(labels))][0]
 
         if field_to_edit in next(zip(*labels))[:3]:
             raise InvalidInputError('This field is not editable.')
@@ -421,23 +483,6 @@ class Menu:
                     else:
                         print('Error adding job.')
                 return
-
-            elif modify_job_history == 'remove':
-                index = int(input("Enter the index of the job to remove: "))
-                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg='Failed to delete job.', authenticate=True)
-
-            elif modify_job_history == 'edit':
-                field_to_edit = labels[get_index(input('Enter the index of the field to edit: '), len(labels))]
-
-                if field_to_edit in next(zip(*labels))[:3]:
-                    raise InvalidInputError('This field is not editable.')
-
-                new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
-
-                self.post('/edit-job-history', {'id': job['id'], field_to_edit: new_value},
-                    error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
-
-                print(f'Successfully updated {field_to_edit}\'s value.')
 
     def discover_users(self):
         users = self.get('/list-users', error_msg='Error retrieving user list.')
@@ -643,7 +688,7 @@ class Menu:
         for i, posting in enumerate(job_postings):
             print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of a job above to delete the posting: '), len(job_postings))]
 
         self.post('/delete-job', { 'job_id': choice['id'] }, error_msg='Unable to delete job.', authenticate=True)
         print('Job successfully deleted.')
@@ -684,7 +729,7 @@ class Menu:
             else:
                 print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of the job to mark it as saved: '), len(job_postings))]
 
         if choice['id'] in jobs_marked:
             raise InvalidInputError('You have already marked this position.')
@@ -704,7 +749,7 @@ class Menu:
             posting = [posting for posting in job_postings if posting['id'] == job_id][0]
             print(f'{i + 1}) {posting["title"]}')
 
-        choice = job_postings[get_index(input('Enter the index of a job above to see its entire posting: '), len(job_postings))]
+        choice = job_postings[get_index(input('Enter the index of the job to unmark it: '), len(job_postings))]['id']
 
         self.post('/unmark', { 'job_id': choice }, error_msg='Unable to unmark job.', authenticate=True)
         print('Job successfully unmarked.')

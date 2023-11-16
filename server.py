@@ -30,7 +30,6 @@ def authenticate():
         payload = jwt.decode(token, Path('./jwt-key.txt').read_text().strip(), algorithms=['HS256'])
         g.user_id, g.username = payload['user_id'], payload['username']
     except (KeyError, IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
-        print(e)
         return 'Unauthorized', 401
 
     if g.session.query(Users).filter(Users.id == g.user_id).one_or_none() is None:
