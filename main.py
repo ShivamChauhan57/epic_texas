@@ -73,6 +73,7 @@ class Menu:
                 ('Sign up', self.signup),
                 ('Lookup users', self.lookup_users),
                 ('Discover users', self.discover_users),
+                ('Learn a skill', lambda: self.change_mode('skills')),
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Exit', lambda: self.change_mode('exited'))
@@ -88,6 +89,7 @@ class Menu:
                 ('Create/view/edit profile', lambda: self.change_mode('profile')),
                 ('Discover users', self.discover_users),
                 ('Lookup users', self.lookup_users),
+                ('Learn a skill', lambda: self.change_mode('skills')),
                 ('Send connection requests', self.send_connection_request),
                 ('View requests', self.consider_requests),
                 ('Show my network', self.view_connections),
@@ -97,6 +99,15 @@ class Menu:
                 ('Useful links', lambda: self.change_mode('useful links')),
                 ('InCollege Important Links', lambda: self.change_mode('incollege links')),
                 ('Log out', self.logout)
+            ]
+        elif self.mode == 'skills':
+            options = [
+                ('Learn React', self.under_construction),
+                ('Learn Node.js', self.under_construction),
+                ('Learn Postgres', self.under_construction),
+                ('Learn Python', self.under_construction),
+                ('Learn Machine Learning', self.under_construction),
+                ('Go back', lambda: self.change_mode('main' if self.access_token is not None else 'log-in'))
             ]
         elif self.mode == 'profile':
             options = [
@@ -184,9 +195,23 @@ class Menu:
 
             options.append(('Go back', lambda: self.change_mode('incollege links')))
         elif self.mode == 'languages':
+            self.fetch_user_preferences()
+            if any(setting is None for setting in
+                [self.email_notifications_enabled, self.sms_notifications_enabled, self.targeted_advertising_enabled, self.language]):
+                print('Error fetching user language')
+                return [('Go back', lambda: self.change_mode('incollege links'))]
+
+            english_option, spanish_option = 'English', 'Spanish'
+            if self.language == 'english':
+                english_option += ' (current language)'
+            elif self.language == 'spanish':
+                spanish_option += ' (current language)'
+            else:
+                raise Exception(f'Invalid language value: {self.language}')
+
             options = [
-                ('English', lambda: self.set_user_preferences('language', 'english')),
-                ('Spanish', lambda: self.set_user_preferences('language', 'spanish')),
+                (english_option, lambda: self.set_user_preferences('language', 'english')),
+                (spanish_option, lambda: self.set_user_preferences('language', 'spanish')),
                 ('Go Back', lambda: self.change_mode('incollege links'))
             ]
         elif self.mode == 'messenger':
@@ -389,7 +414,7 @@ class Menu:
         if field_to_edit.strip() == '':
             return
 
-        field_to_edit = labels[get_index(field_to_edit, len(field_to_edit))][0]
+        field_to_edit = labels[get_index(field_to_edit, len(labels))][0]
 
         if field_to_edit in next(zip(*labels))[:3]:
             raise InvalidInputError('This field is not editable.')
@@ -458,23 +483,6 @@ class Menu:
                     else:
                         print('Error adding job.')
                 return
-
-            elif modify_job_history == 'remove':
-                index = int(input("Enter the index of the job to remove: "))
-                self.post('/remove-job-history', {'id': response[index-1]['id'] }, error_msg='Failed to delete job.', authenticate=True)
-
-            elif modify_job_history == 'edit':
-                field_to_edit = labels[get_index(input('Enter the index of the field to edit: '), len(labels))]
-
-                if field_to_edit in next(zip(*labels))[:3]:
-                    raise InvalidInputError('This field is not editable.')
-
-                new_value = input(f'Enter the {dict(labels)[field_to_edit]}: ')
-
-                self.post('/edit-job-history', {'id': job['id'], field_to_edit: new_value},
-                    error_msg=f'Failed to update {field_to_edit} to new value.', authenticate=True)
-
-                print(f'Successfully updated {field_to_edit}\'s value.')
 
     def discover_users(self):
         users = self.get('/list-users', error_msg='Error retrieving user list.')

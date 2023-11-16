@@ -454,14 +454,15 @@ def set_user_preferences():
     if len(data) != 1:
         return jsonify({'error': 'FORMAT: { field: value }'}), 400
     field, value = list(data.items())[0]
-    if field not in ['email_notifications_enabled',
-        'sms_notifications_enabled',
-        'targeted_advertising_enabled',
-        'language']:
+    if field not in [
+            'email_notifications_enabled',
+            'sms_notifications_enabled',
+            'targeted_advertising_enabled',
+            'language'
+        ]:
         return jsonify({'error': f'Invalid field: {field}'}), 400
 
-    if (field == 'language' and value not in ['english', 'spanish']) or \
-        not isinstance(value, bool):
+    if not ((field == 'language' and value in ['english', 'spanish']) or isinstance(value, bool)):
         return jsonify({'error': f'Invalid {field}.'}), 400
 
     preferences = session.query(UserPreferences) \
